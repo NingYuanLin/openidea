@@ -126,3 +126,22 @@
 .noMatch .speedQuery {
   color: var(--danger);
 }
+
+/* display:contents preserves the default Tree DOM layout. Only opted-in trees
+   get a natural-width measuring box independent of the stretched row. */
+.rowContent {
+  display: contents;
+}
+.contentWidth .rowContent {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+.contentWidth .label,
+.contentWidth .detail {
+  flex: none;
+  overflow: visible;
+}

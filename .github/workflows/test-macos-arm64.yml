@@ -1,0 +1,51 @@
+name: Test macOS ARM64 DMG
+on:
+  push:
+    branches: [test/project-tree-scroll-macos-arm64-20261030]
+permissions:
+  contents: read
+concurrency:
+  group: test-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dmg:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@v2
+        with: { key: test-aarch64-apple-darwin }
+      - run: pnpm install --frozen-lockfile
+      - name: Build ad-hoc signed test DMG
+        run: >-
+          pnpm tauri build --target aarch64-apple-darwin --bundles dmg
+          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+      - name: Verify ARM64 app and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=target/aarch64-apple-darwin/release/bundle/macos/OpenIDEA.app
+          file "$app/Contents/MacOS/openidea"
+          test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p test-artifacts
+          cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg test-artifacts/
+          for dmg in test-artifacts/*.dmg; do hdiutil verify "$dmg"; done
+          cd test-artifacts
+          shasum -a 256 *.dmg | tee SHA256SUMS.txt
+          printf '%s\n' "$GITHUB_SHA" > COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenIDEA-macOS-ARM64-test
+          path: test-artifacts/
+          if-no-files-found: error
+          retention-days: 14

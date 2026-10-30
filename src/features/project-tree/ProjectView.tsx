@@ -26,7 +26,13 @@ import { isTauri } from "@/platform/ipc";
 import type { RootFolder } from "@/platform/languageSettings";
 import { useEffectiveRoots } from "@/platform/projectRoots";
 import { macStroke, strokeOf } from "@/platform/keymap";
-import { OWNS_FILE_DROP, prepareMenuGroups, useFileDecoration } from "@/workbench/contributions";
+import {
+  OWNS_FILE_DROP,
+  getFileDecoration,
+  prepareMenuGroups,
+  useFileDecoration,
+  useFileDecorations,
+} from "@/workbench/contributions";
 import {
   FILES_DRAG,
   HighlightedText,
@@ -132,9 +138,25 @@ function InlineEditor({ editing, initial, onDone }: { editing: Editing; initial:
     const input = ref.current;
     if (!input) return;
     input.focus({ preventScroll: true });
+    // Reveal only horizontally: native scrollIntoView would also disturb the
+    // virtual tree's vertical position when renaming a deeply nested file.
+    const reveal = () => {
+      const tree = input.closest<HTMLElement>('[role="tree"]');
+      if (!tree) return;
+      const viewport = tree.getBoundingClientRect();
+      const bounds = input.getBoundingClientRect();
+      if (bounds.left < viewport.left + 6) tree.scrollLeft += bounds.left - viewport.left - 6;
+      else if (bounds.right > viewport.right - 6) tree.scrollLeft += bounds.right - viewport.right + 6;
+    };
+    reveal();
+    // The parent measures the new input and widens the sizer in its layout
+    // effect. Reveal again after that commit, otherwise the old range can clamp
+    // the first scrollLeft assignment (especially for a previously short name).
+    const frame = requestAnimationFrame(reveal);
     // IDEA selects the name without its extension on rename.
     const [stem] = editing.kind === "rename" ? splitExtension(initial) : [initial];
     input.setSelectionRange(0, stem.length);
+    return () => cancelAnimationFrame(frame);
   }, [editing.kind, initial]);
 
   // Escape must cancel the edit instead of moving focus to the editor.
@@ -263,36 +285,38 @@ const Row = memo(function Row({
       onDoubleClick={(e) => onDoubleClick(node, e)}
       onPointerDown={(e) => onPointerDown(node, e)}
     >
-      <Icon
-        name={icon}
-        size={16}
-        className={clsx(styles.icon, node.dir && styles.folderIcon, dimIcon && styles.faded)}
-      />
-      {isEditing && editing ? (
-        <InlineEditor
-          editing={editing}
-          initial={editing.kind === "rename" ? nameOf(editing.path) : ""}
-          onDone={onEditDone}
+      <span className={styles.intrinsic} data-tree-intrinsic>
+        <Icon
+          name={icon}
+          size={16}
+          className={clsx(styles.icon, node.dir && styles.folderIcon, dimIcon && styles.faded)}
         />
-      ) : (
-        <>
-          <HighlightedText
-            className={clsx(
-              styles.label,
-              // Only the project itself is bold (IDEA); contributed roots like Scratches are not.
-              node.root && !node.icon && styles.rootLabel,
-              faded && !deco.color && styles.excluded,
-              deco.error && styles.error,
-            )}
-            style={deco.color ? { color: deco.color } : undefined}
-            text={node.label}
-            indices={matches}
-            tone="accent"
+        {isEditing && editing ? (
+          <InlineEditor
+            editing={editing}
+            initial={editing.kind === "rename" ? nameOf(editing.path) : ""}
+            onDone={onEditDone}
           />
-          {detail && <span className={styles.detail}>{detail}</span>}
-          {deco.badge && <span className={styles.badge}>{deco.badge}</span>}
-        </>
-      )}
+        ) : (
+          <>
+            <HighlightedText
+              className={clsx(
+                styles.label,
+                // Only the project itself is bold (IDEA); contributed roots like Scratches are not.
+                node.root && !node.icon && styles.rootLabel,
+                faded && !deco.color && styles.excluded,
+                deco.error && styles.error,
+              )}
+              style={deco.color ? { color: deco.color } : undefined}
+              text={node.label}
+              indices={matches}
+              tone="accent"
+            />
+            {detail && <span className={styles.detail}>{detail}</span>}
+            {deco.badge && <span className={styles.badge}>{deco.badge}</span>}
+          </>
+        )}
+      </span>
     </span>
   );
 });
@@ -606,6 +630,24 @@ export function ProjectView() {
   const cutPaths = useMemo(() => new Set(clipboard?.cut ? clipboard.paths : []), [clipboard]);
   const rootDetail = root ? tildify(root, home) : null;
 
+  const decorations = useFileDecorations();
+  const getContentWidth = useCallback(
+    (node: ProjectNode, measure: (text: string, bold?: boolean) => number) => {
+      const detail = node.root && !node.icon ? rootDetail : node.detail;
+      const badge = decorations.providers.size ? getFileDecoration(node.path)?.badge : undefined;
+      // Icon + gap + label, then the optional detail and badge. Mounted DOM
+      // measurement corrects custom decoration fonts and inline editors.
+      return (
+        16 +
+        5 +
+        measure(node.label, !!node.root && !node.icon) +
+        (detail ? 9 + measure(detail) : 0) +
+        (badge ? 15 + measure(badge) : 0)
+      );
+    },
+    [rootDetail, decorations],
+  );
+
   const renderNode = useCallback(
     (node: ProjectNode, state: TreeRowState) => (
       <Row
@@ -646,6 +688,8 @@ export function ProjectView() {
       )}
       <Tree<ProjectNode>
         aria-label="Project"
+        contentWidth
+        getContentWidth={getContentWidth}
         handleRef={setTreeHandle}
         roots={model.roots}
         getKey={getKey}

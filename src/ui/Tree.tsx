@@ -27,6 +27,7 @@ import { Spinner } from "./Feedback";
 import { fuzzyMatch } from "./match";
 import { acquirePopup } from "./popupState";
 import styles from "./Tree.module.css";
+import { useTreeContentWidth, type MeasureTreeText } from "./useTreeContentWidth";
 import { T } from "./T";
 import { tx } from "@/platform/i18n";
 
@@ -79,6 +80,10 @@ export interface TreeProps<T> {
   getIcon?: (node: T, expanded: boolean) => IconName | (string & {}) | undefined;
   /** Muted trailing text (e.g. a path next to the project root). */
   getDetail?: (node: T) => string | undefined;
+  /** Opt in to intrinsic content width and horizontal scrolling. */
+  contentWidth?: boolean;
+  /** Content after the chevron, including custom icons/details. */
+  getContentWidth?: (node: T, measure: MeasureTreeText) => number;
   /** Label colour, e.g. VCS status. */
   getColor?: (node: T) => string | undefined;
 
@@ -136,6 +141,8 @@ export function Tree<T>(props: TreeProps<T>) {
     renderNode,
     getIcon,
     getDetail,
+    contentWidth = false,
+    getContentWidth,
     getColor,
     multiSelect = true,
     onActivate,
@@ -215,6 +222,8 @@ export function Tree<T>(props: TreeProps<T>) {
   const positions = useMemo(() => siblingPositions(rows), [rows]);
   const indexOfKey = useMemo(() => new Map(rows.map((r, i) => [r.key, i])), [rows]);
   const leadIndex = lead != null ? (indexOfKey.get(lead) ?? -1) : -1;
+
+  const treeWidth = useTreeContentWidth(contentWidth, scrollRef, rows, indent, getLabel, getContentWidth);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -478,7 +487,8 @@ export function Tree<T>(props: TreeProps<T>) {
             : undefined
         }
         tabIndex={0}
-        className={styles.tree}
+        className={clsx(styles.tree, contentWidth && styles.contentWidth)}
+        data-content-width={contentWidth || undefined}
         onKeyDown={onKeyDown}
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setQuery("");
@@ -497,7 +507,7 @@ export function Tree<T>(props: TreeProps<T>) {
             : undefined
         }
       >
-        <div className={styles.sizer} style={{ height: virtualizer.getTotalSize() }}>
+        <div className={styles.sizer} style={{ height: virtualizer.getTotalSize(), width: treeWidth }}>
           {virtualizer.getVirtualItems().map((v) => {
             const row = rows[v.index]!;
             const pad = 4 + row.depth * indent;
@@ -549,34 +559,36 @@ export function Tree<T>(props: TreeProps<T>) {
                 onMouseDown={(e) => onRowMouseDown(e, v.index)}
                 onDoubleClick={(e) => activate(row, e)}
               >
-                <span
-                  className={styles.chevron}
-                  onMouseDown={(e) => {
-                    if (!row.expandable || e.button !== 0) return;
-                    e.stopPropagation();
-                    setExpanded(row, !row.expanded);
-                    if (!row.expanded) return;
-                    if (leadRow && isDescendant(byKey, leadRow.key, row.key)) selectIndex(v.index);
-                  }}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                >
-                  {row.expandable && <Icon name={row.expanded ? "chevron-down" : "chevron-right"} size={16} />}
-                </span>
-                {renderNode ? (
-                  renderNode(row.node, state)
-                ) : (
-                  <>
-                    {icon && <Icon name={icon} size={16} className={styles.icon} />}
-                    <HighlightedText
-                      className={styles.label}
-                      style={color ? { color } : undefined}
-                      text={getLabel(row.node)}
-                      indices={matches}
-                      tone="accent"
-                    />
-                    {detail && <span className={styles.detail}>{detail}</span>}
-                  </>
-                )}
+                <div className={styles.rowContent} data-tree-content={contentWidth || undefined}>
+                  <span
+                    className={styles.chevron}
+                    onMouseDown={(e) => {
+                      if (!row.expandable || e.button !== 0) return;
+                      e.stopPropagation();
+                      setExpanded(row, !row.expanded);
+                      if (!row.expanded) return;
+                      if (leadRow && isDescendant(byKey, leadRow.key, row.key)) selectIndex(v.index);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                  >
+                    {row.expandable && <Icon name={row.expanded ? "chevron-down" : "chevron-right"} size={16} />}
+                  </span>
+                  {renderNode ? (
+                    renderNode(row.node, state)
+                  ) : (
+                    <>
+                      {icon && <Icon name={icon} size={16} className={styles.icon} />}
+                      <HighlightedText
+                        className={styles.label}
+                        style={color ? { color } : undefined}
+                        text={getLabel(row.node)}
+                        indices={matches}
+                        tone="accent"
+                      />
+                      {detail && <span className={styles.detail}>{detail}</span>}
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}

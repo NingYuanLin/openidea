@@ -69,6 +69,7 @@ describe("ProjectView", () => {
     const { rows, row, tree } = setup();
     await waitFor(() => expect(rows()).toEqual(["acme/w/acme", "build", "src", "README.md"]));
     expect(row("build").querySelector("[class*=excluded]")).not.toBeNull();
+    expect(tree).toHaveAttribute("data-content-width", "true");
     fireEvent.mouseDown(row("src"));
     tree.focus();
     fireEvent.keyDown(tree, { key: "ArrowRight" });

@@ -16,6 +16,15 @@
   border-radius: var(--radius-row);
 }
 
+.intrinsic {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  flex: none;
+  height: 100%;
+}
+
 .icon {
   flex: none;
   color: var(--fg-muted);
@@ -28,13 +37,10 @@
 }
 
 .label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
 }
 .rootLabel {
   flex: none;
-  max-width: 60%;
   color: var(--fg-strong);
   font-weight: 600;
 }
@@ -51,10 +57,8 @@
   text-underline-offset: 3px;
 }
 .detail {
-  min-width: 0;
+  flex: none;
   margin-left: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-subtle);
 }

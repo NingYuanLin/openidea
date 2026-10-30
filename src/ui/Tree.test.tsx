@@ -214,3 +214,57 @@ describe("siblingPositions", () => {
     ]);
   });
 });
+
+describe("Tree content-width opt-in", () => {
+  it("recalculates an existing key when its content changes", () => {
+    const roots = [{ id: "src", children: [{ id: "wide-child" }] }];
+    const props = {
+      roots,
+      getKey: (node: N) => node.id,
+      getLabel: (node: N) => node.id,
+      getChildren: (node: N) => node.children,
+      isExpandable: (node: N) => !!node.children,
+      contentWidth: true,
+    };
+    const { rerender } = render(<Tree {...props} getContentWidth={() => 1400} />);
+    const width = () => Number.parseFloat((screen.getByRole("tree").firstElementChild as HTMLElement).style.width);
+    expect(width()).toBeGreaterThanOrEqual(1400);
+    rerender(<Tree {...props} getContentWidth={() => 80} />);
+    expect(width()).toBeLessThan(1400);
+  });
+
+  it("drops collapsed descendants from the shared content width", () => {
+    const roots = [{ id: "src", children: [{ id: "wide-child" }] }];
+    const { tree, key } = setup({
+      roots,
+      defaultExpanded: ["src"],
+      contentWidth: true,
+      getContentWidth: (node) => (node.id === "wide-child" ? 1400 : 80),
+    });
+    const width = () => Number.parseFloat((tree.firstElementChild as HTMLElement).style.width);
+    expect(width()).toBeGreaterThanOrEqual(1400);
+    key("ArrowDown");
+    key("ArrowLeft");
+    expect(within(tree).queryByText("wide-child")).not.toBeInTheDocument();
+    expect(width()).toBeLessThan(1400);
+    expect(width()).toBeGreaterThanOrEqual(tree.clientWidth);
+  });
+
+  it("keeps the default shared-tree layout unchanged", () => {
+    const { tree } = setup();
+    expect(tree).not.toHaveAttribute("data-content-width");
+    expect((tree.firstElementChild as HTMLElement).style.width).toBe("");
+  });
+
+  it("estimates unmounted rows as well as the rendered virtual window", () => {
+    const roots = Array.from({ length: 100 }, (_, i) => ({ id: `item-${i}` }));
+    const getContentWidth = vi.fn((node: N) => (node.id === "item-99" ? 1400 : 80));
+    const { tree } = setup({ roots, contentWidth: true, getContentWidth });
+    expect(tree).toHaveAttribute("data-content-width", "true");
+    expect(within(tree).queryByText("item-99")).not.toBeInTheDocument();
+    expect(getContentWidth).toHaveBeenCalledWith(roots[99], expect.any(Function));
+    expect(Number.parseFloat((tree.firstElementChild as HTMLElement).style.width)).toBeGreaterThanOrEqual(1400);
+    expect(within(tree).getAllByRole("treeitem").length).toBeLessThan(100);
+    expect(tree.querySelector("[data-tree-content]")).not.toBeNull();
+  });
+});
