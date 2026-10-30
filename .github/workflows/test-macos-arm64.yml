@@ -23,7 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: aarch64-apple-darwin }
       - uses: Swatinem/rust-cache@v2
-        with: { key: test-aarch64-apple-darwin }
+        with:
+          key: test-aarch64-apple-darwin
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - name: Build ad-hoc signed test DMG
         run: >-
@@ -33,17 +35,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app=target/aarch64-apple-darwin/release/bundle/macos/OpenIDEA.app
-          file "$app/Contents/MacOS/openidea"
-          test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
-          codesign --verify --deep --strict --verbose=2 "$app"
           mkdir -p test-artifacts
           cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg test-artifacts/
-          for dmg in test-artifacts/*.dmg; do hdiutil verify "$dmg"; done
+          mountpoint="$RUNNER_TEMP/openidea-dmg-verify"
+          mkdir -p "$mountpoint"
+          for dmg in test-artifacts/*.dmg; do
+            hdiutil verify "$dmg"
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+            trap 'hdiutil detach "$mountpoint" || true' EXIT
+            app="$mountpoint/OpenIDEA.app"
+            file "$app/Contents/MacOS/openidea"
+            test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
+            codesign --verify --deep --strict --verbose=2 "$app"
+            hdiutil detach "$mountpoint"
+            trap - EXIT
+          done
           cd test-artifacts
           shasum -a 256 *.dmg | tee SHA256SUMS.txt
           printf '%s\n' "$GITHUB_SHA" > COMMIT.txt
       - uses: actions/upload-artifact@v4
+        if: ${{ always() && !cancelled() }}
         with:
           name: OpenIDEA-macOS-ARM64-test
           path: test-artifacts/
