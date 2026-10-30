@@ -1,0 +1,63 @@
+name: Java Accessor Usages macOS ARM64 DMG
+on:
+  push:
+    branches: [test/java-accessor-usages-macos-arm64-20261030]
+permissions:
+  contents: read
+concurrency:
+  group: test-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-aarch64-apple-darwin
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Build ad-hoc signed test DMG
+        run: >-
+          pnpm tauri build --target aarch64-apple-darwin --bundles dmg
+          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+      - name: Verify ARM64 app and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-artifacts
+          cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg test-artifacts/
+          mountpoint="$RUNNER_TEMP/openidea-dmg-verify"
+          mkdir -p "$mountpoint"
+          for dmg in test-artifacts/*.dmg; do
+            hdiutil verify "$dmg"
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+            trap 'hdiutil detach "$mountpoint" || true' EXIT
+            app="$mountpoint/OpenIDEA.app"
+            file "$app/Contents/MacOS/openidea"
+            test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
+            codesign --verify --deep --strict --verbose=2 "$app"
+            python3 -c 'import hashlib,pathlib,sys; j=pathlib.Path("plugins/java-usages/openidea-java-usages.jar").read_bytes(); h=hashlib.sha256(j).hexdigest(); assert h=="8d61a71380afda865fe5a0e0b6463cb3238c728c2612618930b83f922c4e2495", h; b=pathlib.Path(sys.argv[1]).read_bytes(); offset=b.find(j); assert offset>=0, "Exact embedded Java extension missing"; print(f"Verified embedded Java extension: offset={offset}, bytes={len(j)}, SHA256={h}")' "$app/Contents/MacOS/openidea"
+            hdiutil detach "$mountpoint"
+            trap - EXIT
+          done
+          cd test-artifacts
+          shasum -a 256 *.dmg | tee SHA256SUMS.txt
+          printf 'Build commit: %s\nFeature base: 9c31a27e30fb34e2dd6d2d8022b41e71d4a38305\n' "$GITHUB_SHA" > COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !cancelled() }}
+        with:
+          name: OpenIDEA-java-accessor-usages-macOS-ARM64-test
+          path: test-artifacts/
+          if-no-files-found: error
+          retention-days: 14

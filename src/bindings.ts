@@ -4804,7 +4804,10 @@ export type RecentProject = {
 	branch: string | null,
 };
 
+export type ReferenceKind = "getter" | "setter" | "field" | "unknown";
+export type ClassifiedReference = { location: Location; kind: ReferenceKind };
 export type References = {
+	classified?: ClassifiedReference[];
 	locations: Location[],
 	incomplete: ReferencesIncomplete | null,
 };

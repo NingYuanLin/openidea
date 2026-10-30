@@ -336,6 +336,25 @@ pub enum ReferencesIncomplete {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct References {
+    /// Semantic classifications supplied by a language extension. Missing entries are unknown.
+    #[serde(default)]
+    #[specta(optional)]
+    pub classified: Vec<ClassifiedReference>,
     pub locations: Vec<Location>,
     pub incomplete: Option<ReferencesIncomplete>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ReferenceKind {
+    Getter,
+    Setter,
+    Field,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+pub struct ClassifiedReference {
+    pub location: Location,
+    pub kind: ReferenceKind,
 }

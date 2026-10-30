@@ -1,6 +1,6 @@
 /** Find Usages (⌥F7 → "usages" tool window) and Show Usages (⌥⌘F7 → popup). */
 import { create } from "zustand";
-import type { Location, ReferencesIncomplete, RequestId } from "@/bindings";
+import type { ClassifiedReference, ReferenceKind, Location, ReferencesIncomplete, RequestId } from "@/bindings";
 import { clearLineTokens } from "@/editor/lineTokens";
 import { commands, isCancelled, nextRequestId } from "@/platform/ipc";
 import { toolWindowService } from "@/workbench/contributions";
@@ -17,6 +17,9 @@ import {
 import { syntaxUsages } from "./syntaxUsages";
 
 export interface Usage {
+  kind?: ReferenceKind;
+  /** Exact semantic range, retained when the line preview is clamped. */
+  sourceLocation?: Location;
   path: string;
   line: number;
   col: number;
@@ -35,18 +38,27 @@ export interface UsageGroup {
 export function groupUsages(
   locs: readonly Location[],
   files: ReadonlyMap<string, readonly string[] | null>,
+  classified: readonly ClassifiedReference[] = [],
 ): UsageGroup[] {
+  const kinds = new Map(classified.map((r) => [usageLocationKey(r.location), r.kind]));
   const byPath = new Map<string, Usage[]>();
   const seen = new Set<string>();
   for (const l of locs) {
-    const key = `${l.path}:${l.range.start.line}:${l.range.start.col}`;
+    const key = usageLocationKey(l);
     if (seen.has(key)) continue;
     seen.add(key);
     const text = files.get(l.path)?.[l.range.start.line] ?? "";
     const endCol = l.range.end.line === l.range.start.line ? l.range.end.col : Math.max(text.length, l.range.start.col);
     let list = byPath.get(l.path);
     if (!list) byPath.set(l.path, (list = []));
-    list.push({ path: l.path, line: l.range.start.line, col: l.range.start.col, endCol, text });
+    list.push({
+      ...(kinds.has(usageLocationKey(l)) ? { kind: kinds.get(usageLocationKey(l)), sourceLocation: l } : {}),
+      path: l.path,
+      line: l.range.start.line,
+      col: l.range.start.col,
+      endCol,
+      text,
+    });
   }
   return [...byPath.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -174,12 +186,14 @@ export async function fetchUsages(c: CaretContext, request: RequestId = nextRequ
   // Usage lines are read afresh: so are the files their syntax colours come from.
   clearLineTokens();
   let locs: Location[];
+  let classified: ClassifiedReference[] = [];
   let note: string | null = null;
   try {
     const refs = await lspRequest(() =>
       commands.lspReferences(request, c.doc, { line: c.line, col: c.col }, false, true),
     );
     locs = refs.locations;
+    classified = refs.classified ?? [];
     if (refs.incomplete) note = incompleteNote(refs.incomplete, c.word);
   } catch (e) {
     if (isCancelled(e)) throw e;
@@ -195,7 +209,7 @@ export async function fetchUsages(c: CaretContext, request: RequestId = nextRequ
     note = fb.note;
   }
   const files = await readManyFileLines(locs.map((l) => l.path));
-  return { groups: groupUsages(locs, files), note };
+  return { groups: groupUsages(locs, files, classified), note };
 }
 
 /** In-flight server requests: of tool window searches by search id, and of the popup. */
@@ -254,7 +268,12 @@ export async function findUsages() {
  * Ignores malformed arguments.
  */
 export async function showUsageResults(arg: unknown) {
-  const a = (arg ?? {}) as { symbol?: unknown; locations?: unknown };
+  const a = (arg ?? {}) as {
+    symbol?: unknown;
+    locations?: unknown;
+    classified?: ClassifiedReference[];
+    note?: unknown;
+  };
   if (!Array.isArray(a.locations)) return;
   const locs = a.locations as Location[];
   const symbol = typeof a.symbol === "string" ? a.symbol : null;
@@ -264,7 +283,13 @@ export async function showUsageResults(arg: unknown) {
   toolWindowService().show("usages");
   clearLineTokens();
   const files = await readManyFileLines(locs.map((l) => l.path));
-  replaceUsageTab(id, { ...base, loading: false, groups: groupUsages(locs, files), error: null, note: null });
+  replaceUsageTab(id, {
+    ...base,
+    loading: false,
+    groups: groupUsages(locs, files, a.classified),
+    error: null,
+    note: typeof a.note === "string" ? a.note : null,
+  });
 }
 
 export async function showUsagesPopup() {
@@ -297,4 +322,8 @@ export async function showUsagesPopup() {
   } finally {
     if (popupRequest === request) popupRequest = null;
   }
+}
+
+function usageLocationKey(l: Location): string {
+  return JSON.stringify([l.path, l.range.start.line, l.range.start.col, l.range.end.line, l.range.end.col]);
 }

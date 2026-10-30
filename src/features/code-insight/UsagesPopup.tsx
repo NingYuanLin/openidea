@@ -18,6 +18,8 @@ import { UsagePreview } from "./UsagesView";
 import styles from "./UsagesPopup.module.css";
 import { tx } from "@/platform/i18n";
 
+import { UsageKindFilter, filterUsageKind, type UsageKindFilterValue } from "./UsageKindFilter";
+
 const close = () => useUsagesPopup.setState({ open: false });
 
 const PREVIEW_KEY = "openidea.usages.popupPreview.v1";
@@ -52,10 +54,13 @@ export function filterUsages(items: readonly Usage[], filter: string): Usage[] {
 /** The popup's groups as locations for the Find Usages tool window. */
 export function usageLocations(groups: readonly UsageGroup[]) {
   return groups.flatMap((g) =>
-    g.usages.map((u) => ({
-      path: u.path,
-      range: { start: { line: u.line, col: u.col }, end: { line: u.line, col: u.endCol } },
-    })),
+    g.usages.map(
+      (u) =>
+        u.sourceLocation ?? {
+          path: u.path,
+          range: { start: { line: u.line, col: u.col }, end: { line: u.line, col: u.endCol } },
+        },
+    ),
   );
 }
 
@@ -71,7 +76,9 @@ function UsagesPopupInner() {
   const preview = useUsagesPopupPreview((s) => s.preview);
   const all = useMemo<Usage[]>(() => groups.flatMap((g) => g.usages), [groups]);
   const [filter, setFilter] = useState("");
-  const items = useMemo(() => filterUsages(all, filter), [all, filter]);
+  const [selectedKind, setKind] = useState<UsageKindFilterValue>("all");
+  const kind = all.some((u) => u.kind && u.kind !== "unknown") ? selectedKind : "all";
+  const items = useMemo(() => filterUsages(filterUsageKind(all, kind), filter), [all, filter, kind]);
   const [active, setActive] = useState(0);
   const current = Math.min(active, items.length - 1);
   const total = usageCount(groups);
@@ -82,7 +89,17 @@ function UsagesPopupInner() {
   };
   const openInFindWindow = () => {
     close();
-    void showUsageResults({ symbol, locations: usageLocations(groups) });
+    void showUsageResults({
+      symbol,
+      note,
+      locations: usageLocations(groups),
+      classified: groups.flatMap((g) =>
+        g.usages.map((u) => ({
+          location: usageLocations([{ path: g.path, usages: [u] }])[0]!,
+          kind: u.kind ?? "unknown",
+        })),
+      ),
+    });
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -120,7 +137,9 @@ function UsagesPopupInner() {
         <div className={styles.header}>
           <span className={styles.title}>
             {symbol ? tx`Usages of ${symbol}` : tx("Usages")}{" "}
-            <span className={styles.count}>{filter ? tx`${items.length} of ${total} found` : tx`${total} found`}</span>
+            <span className={styles.count}>
+              {filter || kind !== "all" ? tx`${items.length} of ${total} found` : tx`${total} found`}
+            </span>
           </span>
           {filter && (
             <span className={clsx(styles.filter, !items.length && styles.noMatch)} role="status">
@@ -140,11 +159,21 @@ function UsagesPopupInner() {
             {keys ? ` ${keys}` : ""}
           </button>
         </div>
+        <UsageKindFilter
+          items={all}
+          value={kind}
+          onChange={(value) => {
+            setKind(value);
+            setActive(0);
+          }}
+        />
         {note && <div className={styles.note}>{note}</div>}
         <div className={styles.body} style={{ height: Math.max(1, Math.min(14, items.length)) * ROW }}>
           <List
             items={items}
-            getKey={(u) => `${u.path}:${u.line}:${u.col}`}
+            getKey={(u) =>
+              `${u.path}:${u.line}:${u.col}:${u.sourceLocation?.range.end.line ?? u.line}:${u.sourceLocation?.range.end.col ?? u.endCol}`
+            }
             activeIndex={current}
             onActiveChange={setActive}
             focusable={false}

@@ -1,0 +1,554 @@
+{
+  "workspace": "/tmp/openidea-usages-h_z774ul",
+  "source": "import lombok.Data;\n@Data\nclass Bean {\n    private String name;\n    private boolean active;\n    void direct() { name = \"direct\"; System.out.println(name); }\n}\n@Data\n@lombok.experimental.Accessors(fluent=true, chain=true, prefix=\"m\")\nclass Fluent {\n    private String mTitle;\n}\n@Data\n@lombok.experimental.Accessors(chain=true, prefix=\"m\")\nclass Prefixed {\n    private String mLabel;\n}\nclass Manual {\n    private int size;\n    public int getSize() { return size; }\n    public void setSize(int value) { size = value; }\n    public void setSize(String unrelated) {}\n}\nclass Child extends Manual {}\n@Data\n@lombok.experimental.Accessors(fluent=true)\nclass NotSetter {\n    private String value;\n    public int value(String x) { return 1; }\n}\nclass Use {\n    void unrelated(NotSetter n) { n.value(\"not a setter\"); }\n    void manual(Manual m, Child c) { m.setSize(m.getSize()); System.out.println(c.getSize()); m.setSize(\"unrelated\"); }\n    void prefixed(Prefixed p) { p.setLabel(p.getLabel()); }\n    void fluent(Fluent f) { f.title(f.title()); }\n    void calls(Bean b) { b.setName(b.getName()); b.setActive(b.isActive()); }\n    java.util.function.Supplier<String> getter(Bean b) { return b::getName; }\n    java.util.function.Consumer<String> setter(Bean b) { return b::setName; }\n}\n",
+  "lombokSha256": "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b",
+  "lombokManifest": "Manifest-Version: 1.0\r\nAnt-Version: Apache Ant 1.7.1\r\nCreated-By: 14.3-b01-101 (Apple Inc.)\r\nPremain-Class: lombok.launch.Agent\r\nAgent-Class: lombok.launch.Agent\r\nCan-Redefine-Classes: true\r\nMain-Class: lombok.launch.Main\r\nLombok-Version: 1.18.48\r\nAutomatic-Module-Name: lombok\r\n\r\n",
+  "jdtls": "org.eclipse.jdt.ls.core_1.63.0.202610191322.jar",
+  "commands": {
+    "commands": [
+      "java.project.import",
+      "java.project.changeImportedProjects",
+      "java.navigate.openTypeHierarchy",
+      "java.project.resolveStackTraceLocation",
+      "java.edit.handlePasteEvent",
+      "java.edit.stringFormatting",
+      "java.project.getSettings",
+      "java.project.resolveWorkspaceSymbol",
+      "java.project.upgradeGradle",
+      "openidea.java.usages",
+      "java.project.createModuleInfo",
+      "java.vm.getAllInstalls",
+      "java.edit.organizeImports",
+      "java.project.refreshDiagnostics",
+      "java.getFullyQualifiedName",
+      "java.project.removeFromSourcePath",
+      "java.project.listSourcePaths",
+      "java.project.updateSettings",
+      "java.project.getAll",
+      "java.reloadBundles",
+      "java.project.isTestFile",
+      "java.project.resolveText",
+      "java.project.getClasspaths",
+      "java.navigate.resolveTypeHierarchy",
+      "java.getTroubleshootingInfo",
+      "java.edit.smartSemicolonDetection",
+      "java.project.updateSourceAttachment",
+      "java.project.updateClassPaths",
+      "java.decompile",
+      "java.protobuf.generateSources",
+      "java.project.resolveSourceAttachment",
+      "java.project.updateJdk",
+      "java.project.addToSourcePath",
+      "java.completion.onDidSelect"
+    ]
+  },
+  "cases": {
+    "name": {
+      "before": [
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 20
+            },
+            "end": {
+              "line": 5,
+              "character": 24
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 56
+            },
+            "end": {
+              "line": 5,
+              "character": 60
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 35,
+              "character": 37
+            },
+            "end": {
+              "line": 35,
+              "character": 46
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 36,
+              "character": 67
+            },
+            "end": {
+              "line": 36,
+              "character": 74
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 35,
+              "character": 27
+            },
+            "end": {
+              "line": 35,
+              "character": 47
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 37,
+              "character": 67
+            },
+            "end": {
+              "line": 37,
+              "character": 74
+            }
+          }
+        }
+      ],
+      "after": [
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 5,
+                "character": 20
+              },
+              "end": {
+                "line": 5,
+                "character": 24
+              }
+            }
+          },
+          "kind": "field"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 5,
+                "character": 56
+              },
+              "end": {
+                "line": 5,
+                "character": 60
+              }
+            }
+          },
+          "kind": "field"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 35,
+                "character": 37
+              },
+              "end": {
+                "line": 35,
+                "character": 46
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 36,
+                "character": 67
+              },
+              "end": {
+                "line": 36,
+                "character": 74
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 35,
+                "character": 27
+              },
+              "end": {
+                "line": 35,
+                "character": 47
+              }
+            }
+          },
+          "kind": "setter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 37,
+                "character": 67
+              },
+              "end": {
+                "line": 37,
+                "character": 74
+              }
+            }
+          },
+          "kind": "setter"
+        }
+      ]
+    },
+    "active": {
+      "before": [
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 35,
+              "character": 63
+            },
+            "end": {
+              "line": 35,
+              "character": 73
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 35,
+              "character": 51
+            },
+            "end": {
+              "line": 35,
+              "character": 74
+            }
+          }
+        }
+      ],
+      "after": [
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 35,
+                "character": 63
+              },
+              "end": {
+                "line": 35,
+                "character": 73
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 35,
+                "character": 51
+              },
+              "end": {
+                "line": 35,
+                "character": 74
+              }
+            }
+          },
+          "kind": "setter"
+        }
+      ]
+    },
+    "mTitle": {
+      "before": [],
+      "after": [
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 34,
+                "character": 38
+              },
+              "end": {
+                "line": 34,
+                "character": 45
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 34,
+                "character": 30
+              },
+              "end": {
+                "line": 34,
+                "character": 46
+              }
+            }
+          },
+          "kind": "setter"
+        }
+      ]
+    },
+    "mLabel": {
+      "before": [],
+      "after": [
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 33,
+                "character": 45
+              },
+              "end": {
+                "line": 33,
+                "character": 55
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 33,
+                "character": 34
+              },
+              "end": {
+                "line": 33,
+                "character": 56
+              }
+            }
+          },
+          "kind": "setter"
+        }
+      ]
+    },
+    "size": {
+      "before": [
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 19,
+              "character": 34
+            },
+            "end": {
+              "line": 19,
+              "character": 38
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 20,
+              "character": 37
+            },
+            "end": {
+              "line": 20,
+              "character": 41
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 32,
+              "character": 49
+            },
+            "end": {
+              "line": 32,
+              "character": 58
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 32,
+              "character": 82
+            },
+            "end": {
+              "line": 32,
+              "character": 91
+            }
+          }
+        },
+        {
+          "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+          "range": {
+            "start": {
+              "line": 32,
+              "character": 39
+            },
+            "end": {
+              "line": 32,
+              "character": 59
+            }
+          }
+        }
+      ],
+      "after": [
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 34
+              },
+              "end": {
+                "line": 19,
+                "character": 38
+              }
+            }
+          },
+          "kind": "field"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 20,
+                "character": 37
+              },
+              "end": {
+                "line": 20,
+                "character": 41
+              }
+            }
+          },
+          "kind": "field"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 32,
+                "character": 49
+              },
+              "end": {
+                "line": 32,
+                "character": 58
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 32,
+                "character": 82
+              },
+              "end": {
+                "line": 32,
+                "character": 91
+              }
+            }
+          },
+          "kind": "getter"
+        },
+        {
+          "location": {
+            "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+            "range": {
+              "start": {
+                "line": 32,
+                "character": 39
+              },
+              "end": {
+                "line": 32,
+                "character": 59
+              }
+            }
+          },
+          "kind": "setter"
+        }
+      ]
+    },
+    "value": {
+      "before": [],
+      "after": []
+    }
+  },
+  "accessorsDisabled": [
+    {
+      "location": {
+        "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 20
+          },
+          "end": {
+            "line": 5,
+            "character": 24
+          }
+        }
+      },
+      "kind": "field"
+    },
+    {
+      "location": {
+        "uri": "file:///tmp/openidea-usages-h_z774ul/project/src/Bean.java",
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 56
+          },
+          "end": {
+            "line": 5,
+            "character": 60
+          }
+        }
+      },
+      "kind": "field"
+    }
+  ]
+}

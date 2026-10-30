@@ -41,6 +41,8 @@ import {
 } from "./usages";
 import styles from "./UsagesView.module.css";
 
+import { UsageKindFilter, filterUsageKind, type UsageKindFilterValue } from "./UsageKindFilter";
+
 type Node =
   | { kind: "summary"; key: string }
   | { kind: "file"; key: string; group: UsageGroup }
@@ -101,7 +103,8 @@ export function UsagesTabs() {
 
 const SUMMARY_KEY = "\u0000summary";
 
-const usageKey = (u: Usage) => `${u.path}:${u.line}:${u.col}`;
+const usageKey = (u: Usage) =>
+  `${u.path}:${u.line}:${u.col}:${u.sourceLocation?.range.end.line ?? u.line}:${u.sourceLocation?.range.end.col ?? u.endCol}`;
 
 /** Excluded (⌫) usages per search. */
 const useExcluded = create<{ byTab: Record<number, ReadonlySet<string>> }>(() => ({ byTab: {} }));
@@ -135,9 +138,22 @@ export function UsagesView() {
     id: null,
     keys: new Set(),
   });
+  const [kindState, setKindState] = useState<{ id: number | undefined; value: UsageKindFilterValue }>({
+    id: undefined,
+    value: "all",
+  });
+  const kind =
+    kindState.id === search?.id && search?.groups.some((g) => g.usages.some((u) => u.kind && u.kind !== "unknown"))
+      ? kindState.value
+      : "all";
+  const allUsages = useMemo(() => search?.groups.flatMap((g) => g.usages) ?? [], [search?.groups]);
   const files = useMemo<Node[]>(
-    () => (search?.groups ?? []).map((g) => ({ kind: "file", key: g.path, group: g })),
-    [search?.groups],
+    () =>
+      (search?.groups ?? [])
+        .map((g) => ({ ...g, usages: filterUsageKind(g.usages, kind) }))
+        .filter((g) => g.usages.length > 0)
+        .map((g) => ({ kind: "file", key: g.path, group: g })),
+    [search?.groups, kind],
   );
   const roots = useMemo<Node[]>(() => (files.length ? [{ kind: "summary", key: SUMMARY_KEY }] : []), [files.length]);
   const searchId = search?.id ?? null;
@@ -199,7 +215,10 @@ export function UsagesView() {
             <T>Found usages</T>
           </span>
           <span className={styles.count}>
-            {total} {tx(total === 1 ? "result" : "results")}
+            {kind === "all"
+              ? total
+              : `${files.reduce((n, f) => n + (f.kind === "file" ? f.group.usages.length : 0), 0)} / ${total}`}{" "}
+            {tx(total === 1 ? "result" : "results")}
           </span>
           {search.note && <span className={styles.note}>{search.note}</span>}
         </span>
@@ -245,6 +264,7 @@ export function UsagesView() {
         <IconButton icon="collapse-all" title="Collapse All" size="small" iconSize={16} onClick={() => setAll(true)} />
       </div>
       <div className={styles.body} onKeyDown={onKeyDown}>
+        <UsageKindFilter items={allUsages} value={kind} onChange={(value) => setKindState({ id: search?.id, value })} />
         {(search.loading || search.error) && (
           <div className={styles.summary} role="status" aria-live="polite">
             {search.loading ? (

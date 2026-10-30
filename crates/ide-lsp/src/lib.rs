@@ -126,6 +126,7 @@ impl Target {
 }
 
 struct DocSnap {
+    version: i32,
     path: PathBuf,
     uri: lsp::Uri,
     language: LanguageId,
@@ -822,6 +823,7 @@ impl LspManager {
         let docs = self.docs.lock();
         let d = docs.get(&doc).ok_or_else(|| IdeError::not_found(format!("{doc} is not open")))?;
         Ok(DocSnap {
+            version: d.version,
             path: d.path.clone(),
             uri: d.uri.clone(),
             language: d.language.clone(),
@@ -1090,6 +1092,56 @@ impl LspManager {
         cancel: CancellationToken,
     ) -> IdeResult<References> {
         let (snap, targets) = self.doc_targets(doc, "find references", |c| c.has("referencesProvider")).await?;
+        // The extension preserves method identity before JDT collapses references to locations.
+        // Old/custom servers retain the standard protocol, including cancellation and scope widening.
+        if targets.len() == 1
+            && targets[0].server.name == "jdtls"
+            && targets[0].caps().commands().iter().any(|c| c == "openidea.java.usages")
+        {
+            if cancel.is_cancelled() || !self.docs.lock().get(&doc).is_some_and(|d| d.version == snap.version) {
+                return Err(IdeError::cancelled());
+            }
+            let t = &targets[0];
+            let params = snap.pos_params(t, pos);
+            #[derive(serde::Deserialize)]
+            struct JavaReference {
+                location: lsp::Location,
+                kind: ReferenceKind,
+            }
+            let result: IdeResult<Vec<JavaReference>> = self
+                .call(
+                    t,
+                    "workspace/executeCommand",
+                    json!({
+                        "command": "openidea.java.usages",
+                        "arguments": [params["textDocument"]["uri"], params["position"]["line"],
+                            params["position"]["character"], include_declaration]
+                    }),
+                    Some(&cancel),
+                    LONG_TIMEOUT,
+                )
+                .await;
+            if cancel.is_cancelled() || !self.docs.lock().get(&doc).is_some_and(|d| d.version == snap.version) {
+                return Err(IdeError::cancelled());
+            }
+            match result {
+                Ok(rows) => {
+                    let conv = self.conv(t.enc());
+                    let classified: Vec<ClassifiedReference> = rows
+                        .into_iter()
+                        .filter_map(|r| {
+                            conv.location(&r.location).map(|location| ClassifiedReference { location, kind: r.kind })
+                        })
+                        .collect();
+                    let locations: Vec<Location> = classified.iter().map(|r| r.location.clone()).collect();
+                    self.note_virtual(&t.server, locations.iter().map(|l| l.uri.as_deref()));
+                    let incomplete = t.server.is_busy().then_some(ReferencesIncomplete::Indexing);
+                    return Ok(References { locations, classified, incomplete });
+                }
+                // An advertised command failing is a real error, not absence of the extension.
+                Err(e) => return Err(e),
+            }
+        }
         let requests = targets.iter().map(|t| {
             let (snap, cancel) = (&snap, &cancel);
             async move {
