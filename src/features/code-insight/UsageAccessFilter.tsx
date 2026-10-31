@@ -49,15 +49,17 @@ export function UsageAccessFilter({ items }: { items: readonly Usage[] }) {
   return (
     <div className={styles.toolbar} role="toolbar" aria-label="Usage access filters">
       <IconButton
-        icon="eye"
+        icon="show-read-access"
         size="small"
+        iconSize={16}
         title="Show read accesses"
         pressed={options.read}
         onClick={() => toggleUsageAccess("read")}
       />
       <IconButton
-        icon="edit"
+        icon="show-write-access"
         size="small"
+        iconSize={16}
         title="Show write accesses"
         pressed={options.write}
         onClick={() => toggleUsageAccess("write")}
