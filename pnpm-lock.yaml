@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@xterm/xterm@6.0.0': 0130954e62470e1bf3cb8d48dd27a9a262796fa0661f060b5dcaaf35de7c8972
+
 importers:
 
   .:
@@ -85,7 +88,7 @@ importers:
         version: 0.16.0
       '@xterm/xterm':
         specifier: ^6.0.0
-        version: 6.0.0
+        version: 6.0.0(patch_hash=0130954e62470e1bf3cb8d48dd27a9a262796fa0661f060b5dcaaf35de7c8972)
       anser:
         specifier: ^2.3.5
         version: 2.3.5
@@ -3403,7 +3406,7 @@ snapshots:
 
   '@xterm/addon-search@0.16.0': {}
 
-  '@xterm/xterm@6.0.0': {}
+  '@xterm/xterm@6.0.0(patch_hash=0130954e62470e1bf3cb8d48dd27a9a262796fa0661f060b5dcaaf35de7c8972)': {}
 
   anser@2.3.5: {}
 

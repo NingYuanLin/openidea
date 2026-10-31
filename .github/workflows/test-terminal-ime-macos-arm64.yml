@@ -1,0 +1,93 @@
+name: Terminal IME macOS ARM64 DMG
+on:
+  push:
+    branches: [fix/terminal-ime-scroll-macos-arm64-20261101]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: terminal-ime-dmg-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public fork and ARM runner
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          test "$GITHUB_REPOSITORY" = NingYuanLin/openidea
+          test "$REPOSITORY_PRIVATE" = false
+          test "$(uname -m)" = arm64
+          uname -m
+          sysctl -n hw.ncpu hw.memsize machdep.cpu.brand_string
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-aarch64-apple-darwin
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Validate terminal regression and types
+        run: |
+          pnpm typecheck
+          pnpm exec tsc --noEmit -p e2e/tsconfig.json
+          pnpm exec vitest run src/features/terminal
+          pnpm exec playwright install chromium webkit
+          pnpm exec playwright test --config playwright.terminal.config.ts
+      - name: Build ad-hoc signed test DMG
+        run: >-
+          pnpm tauri build --target aarch64-apple-darwin --bundles dmg
+          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+      - name: Check generated source files
+        run: git diff --exit-code
+      - name: Verify ARM64 app and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-artifacts
+          cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg test-artifacts/
+          mountpoint="$RUNNER_TEMP/openidea-dmg-verify"
+          mkdir -p "$mountpoint"
+          for dmg in test-artifacts/*.dmg; do
+            hdiutil verify "$dmg"
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+            trap 'hdiutil detach "$mountpoint" || true' EXIT
+            app="$mountpoint/OpenIDEA.app"
+            file "$app/Contents/MacOS/openidea"
+            test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign -dvv "$app" 2>&1 | tee test-artifacts/SIGNATURE.txt
+            grep -q 'Signature=adhoc' test-artifacts/SIGNATURE.txt
+            hdiutil detach "$mountpoint"
+            trap - EXIT
+          done
+          cd test-artifacts
+          shasum -a 256 *.dmg | tee SHA256SUMS.txt
+          printf 'Build commit: %s\nTest profile: opt-level=1, lto=false, codegen-units=16\nAd-hoc signed, not notarized. Native Sogou candidate placement and language switching need user verification.\n' "$GITHUB_SHA" > COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenIDEA-terminal-ime-macOS-ARM64-test
+          path: test-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: terminal-ime-test-failures
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
