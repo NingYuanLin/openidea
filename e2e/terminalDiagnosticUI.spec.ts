@@ -39,6 +39,8 @@ test("four targets focus in one document, keyboard navigation and discard protec
     await page.keyboard.press("Enter");
     await expect(page.locator(selector).first()).toBeFocused();
     await page.keyboard.press("ShiftLeft");
+    // Separate single modifiers from the application's existing 300ms double-Shift shortcut.
+    await page.waitForTimeout(500);
     await page.keyboard.press("ShiftRight");
     await expect(page.locator(selector).first()).toBeFocused();
   }

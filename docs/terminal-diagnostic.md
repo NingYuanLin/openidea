@@ -16,7 +16,9 @@ same document/WKWebView, with no iframe or external browser.
 1. Manually select the system Chinese input method, and choose 系统中文输入法 in
    the bar. Click 开始新采样.
 2. Click 聚焦 1 普通输入框, press and release LEFT Shift; repeat with buttons 2,
-   3 and 4. Optionally repeat with RIGHT Shift. Button 3 focuses a transparent
+   3 and 4. Optionally repeat with RIGHT Shift after at least one second: rapid
+   double Shift opens the original Search Everywhere shortcut. If it opens,
+   press Escape and click the focus button again. Button 3 focuses a transparent
    textarea programmatically; the current-focus indicator confirms its target.
 3. For target 4 (the actual terminal), optionally select text and scroll upward
    before Shift to reproduce the original jump. No content is automatically

@@ -135,7 +135,7 @@ export function DiagnosticControls({ diagnostic }: { diagnostic: TerminalDiagnos
       <div className={styles.diagnosticGuide}>
         <small>
           手动切换到上面选择的输入法（本程序不会检测或切换）→ 开始新采样 → 依次点击 1、2、3、4，每次按下并松开左
-          Shift。可再试右 Shift。第 4 项可先上滚，再按 Shift。最后停止并导出。
+          Shift。如需试右 Shift，请间隔至少 1 秒，避免触发双 Shift 搜索。第 4 项可先上滚，再按 Shift。最后停止并导出。
         </small>
         <div className={styles.diagnosticTargets}>
           {TARGETS.map(([target, title]) => (
