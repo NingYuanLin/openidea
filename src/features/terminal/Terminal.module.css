@@ -76,6 +76,8 @@
 }
 
 .diagnostic {
+  max-height: 230px;
+  overflow: auto;
   position: relative;
   flex-shrink: 0;
   z-index: 11;
@@ -168,4 +170,29 @@
 }
 .findSpacer {
   flex: 1;
+}
+
+.diagnosticGuide {
+  flex-basis: 100%;
+  display: grid;
+  gap: 4px;
+}
+.diagnosticTargets,
+.diagnosticFields {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.diagnosticFields label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.diagnosticFields input,
+.diagnosticFields textarea {
+  width: 110px;
+}
+.diagnosticStyled {
+  position: relative;
 }

@@ -1,66 +1,11 @@
+import { EVENTS, safeEvent, observeEarly, eventOrder, type Fields, type DiagnosticTarget } from "./diagnosticEarly";
+export { safeEvent } from "./diagnosticEarly";
 import type { Terminal } from "@xterm/xterm";
 
 export const DIAGNOSTIC_BASELINE = "f48cd85d0b2e6bc11b4661ab483b8c64887272a5";
 export const DIAGNOSTIC_LIMIT = 6000;
 export type DiagnosticLabel = "builtin-chinese" | "sogou-chinese" | "sogou-english" | "abc";
 const LABELS: DiagnosticLabel[] = ["builtin-chinese", "sogou-chinese", "sogou-english", "abc"];
-const KEYS = new Set([
-  "Shift",
-  "Control",
-  "Alt",
-  "Meta",
-  "CapsLock",
-  "Escape",
-  "Enter",
-  "Tab",
-  "Backspace",
-  "Delete",
-  "Process",
-  "Unidentified",
-]);
-const CODES = new Set([
-  "ShiftLeft",
-  "ShiftRight",
-  "ControlLeft",
-  "ControlRight",
-  "AltLeft",
-  "AltRight",
-  "MetaLeft",
-  "MetaRight",
-  "CapsLock",
-  "Escape",
-  "Enter",
-  "Tab",
-  "Backspace",
-  "Delete",
-]);
-const KEYCODES = new Set([8, 9, 13, 16, 17, 18, 20, 27, 46, 91, 92, 93, 229]);
-const INPUT_TYPES = new Set([
-  "insertText",
-  "insertCompositionText",
-  "insertFromComposition",
-  "deleteCompositionText",
-  "insertFromPaste",
-  "deleteContentBackward",
-  "deleteContentForward",
-]);
-const EVENTS = [
-  "keydown",
-  "keyup",
-  "keypress",
-  "beforeinput",
-  "input",
-  "compositionstart",
-  "compositionupdate",
-  "compositionend",
-  "focus",
-  "blur",
-  "mousedown",
-  "mouseup",
-  "wheel",
-  "paste",
-] as const;
-type Fields = Record<string, string | number | boolean | null>;
 type Target = Record<string, unknown>;
 type Source =
   | "keydown"
@@ -86,24 +31,6 @@ type Source =
   | "lines"
   | "viewport";
 
-/** Allowlist before retaining anything. Never retain an Event, text, arbitrary key or stack. */
-export function safeEvent(event: Event): Fields {
-  const e = event as KeyboardEvent & InputEvent & CompositionEvent;
-  return {
-    trusted: event.isTrusted,
-    key: KEYS.has(e.key) ? e.key : "redacted",
-    code: CODES.has(e.code) ? e.code : "redacted",
-    keyCode: KEYCODES.has(e.keyCode) ? e.keyCode : null,
-    shift: !!e.shiftKey,
-    ctrl: !!e.ctrlKey,
-    alt: !!e.altKey,
-    meta: !!e.metaKey,
-    isComposing: !!e.isComposing,
-    inputType: INPUT_TYPES.has(e.inputType) ? e.inputType : "other",
-    dataLength: typeof e.data === "string" ? e.data.length : 0,
-  };
-}
-
 export function safeRuntime() {
   const ua = navigator.userAgent;
   const engine = /AppleWebKit\/(\d+(?:\.\d+){0,3})/.exec(ua)?.[1] ?? "unknown";
@@ -124,6 +51,76 @@ export class TerminalDiagnostic {
   private label: DiagnosticLabel = "builtin-chinese";
   private state = { active: false, reason: "off", count: 0 };
   private disposed = false;
+  private controls = new Map<DiagnosticTarget, HTMLInputElement | HTMLTextAreaElement>();
+  registerControl(target: Exclude<DiagnosticTarget, "terminal">, element: HTMLInputElement | HTMLTextAreaElement) {
+    this.controls.set(target, element);
+    const listener = (event: Event) => this.recordDom(event, "target-capture");
+    for (const type of EVENTS) element.addEventListener(type, listener, true);
+    return () => {
+      for (const type of EVENTS) element.removeEventListener(type, listener, true);
+      if (this.controls.get(target) === element) this.controls.delete(target);
+    };
+  }
+  private classify(event: Event): DiagnosticTarget | null {
+    for (const [target, element] of this.controls) if (event.target === element) return target;
+    return event.target instanceof Node && this.term.element?.contains(event.target) ? "terminal" : null;
+  }
+  private recordDom(event: Event, stage: string, fields = safeEvent(event), order = eventOrder(event)) {
+    const target = this.classify(event);
+    if (target)
+      this.record(`${event.type}:${stage}`, {
+        ...fields,
+        target,
+        order,
+        targetLength:
+          event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
+            ? event.target.value.length
+            : 0,
+      });
+  }
+  focusedTarget(): DiagnosticTarget | null {
+    if (document.activeElement === this.term.textarea) return "terminal";
+    for (const [target, element] of this.controls) if (document.activeElement === element) return target;
+    return null;
+  }
+  focusTarget(target: DiagnosticTarget) {
+    const element = target === "terminal" ? this.term.textarea : this.controls.get(target);
+    if (!element?.isConnected || this.disposed) return false;
+    if (target === "styled-textarea" && this.term.textarea) {
+      // Copy only explicit IME/accessibility attributes and fixed style properties, never value/id/path.
+      for (const name of ["autocorrect", "autocapitalize", "spellcheck", "aria-multiline", "tabindex"]) {
+        const value = this.term.textarea.getAttribute(name);
+        if (value === null) element.removeAttribute(name);
+        else element.setAttribute(name, value);
+      }
+      const computed = getComputedStyle(this.term.textarea);
+      for (const name of [
+        "position",
+        "opacity",
+        "width",
+        "height",
+        "line-height",
+        "z-index",
+        "white-space",
+        "overflow",
+        "resize",
+        "padding",
+        "border",
+        "margin",
+        "font-family",
+        "font-size",
+      ]) {
+        element.style.setProperty(name, computed.getPropertyValue(name));
+      }
+      element.style.left = "0px";
+      element.style.top = "0px";
+      element.readOnly = this.term.textarea.readOnly;
+    }
+    element.focus({ preventScroll: true });
+    const success = document.activeElement === element;
+    this.record("target-focus", { target, success });
+    return success;
+  }
   constructor(
     private term: Terminal,
     private limit = DIAGNOSTIC_LIMIT,
@@ -238,10 +235,16 @@ export class TerminalDiagnostic {
       this.hook(core._selectionService as Target, "_dragScroll", "selection-drag");
       this.hook(core._bufferService as Target, "scroll", "buffer-output-scroll");
       this.hook(core._viewport as Target, "scrollToLine", "viewport");
+      this.undo.push(observeEarly((event, fields, order) => this.recordDom(event, "window-early", fields, order)));
+      const targetListener = (event: Event) => this.recordDom(event, "target-capture");
+      for (const type of EVENTS) {
+        this.term.textarea.addEventListener(type, targetListener, true);
+        this.undo.push(() => this.term.textarea?.removeEventListener(type, targetListener, true));
+      }
       const host = this.term.element!;
       for (const type of EVENTS) {
         for (const capture of [true, false]) {
-          const listener = (event: Event) => this.record(`${type}:${capture ? "capture" : "bubble"}`, safeEvent(event));
+          const listener = (event: Event) => this.recordDom(event, capture ? "capture" : "bubble");
           host.addEventListener(type, listener, capture);
           this.undo.push(() => host.removeEventListener(type, listener, capture));
         }
@@ -276,9 +279,20 @@ export class TerminalDiagnostic {
   exportJson() {
     return JSON.stringify(
       {
-        schema: 1,
-        diagnostic: "sogou-shift-original-v1",
+        schema: 2,
+        diagnostic: "sogou-shift-controls-v2",
         baseline: DIAGNOSTIC_BASELINE,
+        legend: {
+          stages:
+            "window-early precedes application listeners; terminal root capture precedes xterm target; target-capture on terminal is registered after xterm",
+          target:
+            "plain-input / plain-textarea / styled-textarea (copied attributes and cell size, local position, no xterm handlers) / terminal",
+          state:
+            "composing/sendingComposition/viewport/base/selectionLength/textareaLength always describe this terminal; targetLength describes the event target",
+          order:
+            "same DOM event shares order across stages; seq orders all observations; label is manually selected, not detected",
+          trust: "isTrusted distinguishes dispatchEvent; it does not establish human origin",
+        },
         build: import.meta.env.VITE_DIAGNOSTIC_COMMIT ?? "local-uncommitted",
         xterm: "6.0.0-stock",
         runtime: safeRuntime(),
@@ -296,6 +310,7 @@ export class TerminalDiagnostic {
     this.rows = [];
     this.disposed = true;
     this.subscribers.clear();
+    this.controls.clear();
   }
 }
 

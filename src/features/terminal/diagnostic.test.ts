@@ -33,3 +33,46 @@ describe("diagnostic privacy boundary", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("/chosen/file.json", '{"rows":[]}');
   });
 });
+
+describe("v2 prototype and numeric privacy", () => {
+  it("redacts all numeric channels for printable keypresses, including punctuation", () => {
+    for (let code = 32; code < 127; code++) {
+      const event = new KeyboardEvent("keypress", {
+        key: String.fromCharCode(code),
+        code: "KeyA",
+        keyCode: code,
+        charCode: code,
+      });
+      expect(safeEvent(event)).toMatchObject({
+        key: "redacted",
+        code: "redacted",
+        keyCode: null,
+        which: null,
+        prototypeKeyCode: null,
+      });
+    }
+  });
+  it("compares native getter with shadowed control value without changing either", () => {
+    const event = new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", keyCode: 16 });
+    Object.defineProperty(event, "keyCode", { value: 229 });
+    expect(safeEvent(event)).toMatchObject({ keyCode: 229, prototypeKeyCode: 16, ownKeyCode: true });
+    expect(event.keyCode).toBe(229);
+  });
+  it("handles non-keyboard prototype getter failure and cannot retain a shadowed secret", () => {
+    expect(safeEvent(new Event("focus")).prototypeKeyCode).toBeNull();
+    const event = new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", keyCode: 65 });
+    Object.defineProperty(event, "keyCode", { value: "PRIVATE_SENTINEL_4c719b" });
+    expect(safeEvent(event)).toMatchObject({ keyCode: null, prototypeKeyCode: null, ownKeyCode: true });
+    expect(JSON.stringify(safeEvent(event))).not.toContain("PRIVATE_SENTINEL");
+  });
+});
+
+it("unreadable shadowed properties never break event delivery or retain thrown content", () => {
+  const event = new KeyboardEvent("keydown", { key: "Shift", keyCode: 16 });
+  Object.defineProperty(event, "keyCode", {
+    get() {
+      throw new Error("PRIVATE_SENTINEL_4c719b");
+    },
+  });
+  expect(safeEvent(event)).toEqual({ unreadable: true });
+});

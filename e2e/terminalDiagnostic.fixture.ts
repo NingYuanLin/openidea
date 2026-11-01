@@ -1,3 +1,4 @@
+import "../src/features/terminal/diagnosticEarly";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { TerminalDiagnostic } from "../src/features/terminal/diagnostic";

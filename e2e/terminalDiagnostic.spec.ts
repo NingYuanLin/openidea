@@ -153,3 +153,77 @@ test("stop restores original handler identity; ordinary key still works", async 
   await page.keyboard.press("a");
   expect(await page.evaluate(() => window.diagnosticTest.data)).toEqual(["a"]);
 });
+
+test("v2 same-document targets, early order, privacy at every stage and cleanup", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const { terminal: t, diagnostic: d } = window.diagnosticTest;
+    const secret = "PRIVATE_SENTINEL_4c719b";
+    const cleanup: (() => void)[] = [];
+    const nodes: HTMLElement[] = [];
+    for (const target of ["plain-input", "plain-textarea", "styled-textarea"] as const) {
+      const node = document.createElement(target === "plain-input" ? "input" : "textarea");
+      node.value = secret;
+      document.body.appendChild(node);
+      nodes.push(node);
+      cleanup.push(d.registerControl(target, node));
+    }
+    d.start("sogou-english");
+    const focuses = [];
+    for (const target of ["plain-input", "plain-textarea", "styled-textarea", "terminal"] as const) {
+      focuses.push(
+        d.focusTarget(target) && d.focusedTarget() === target && document.activeElement?.ownerDocument === document,
+      );
+      const node = document.activeElement!;
+      node.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", keyCode: 16, bubbles: true }));
+      node.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft", keyCode: 16, bubbles: true }));
+      node.dispatchEvent(
+        new KeyboardEvent("keypress", { key: secret, code: secret, keyCode: 46, charCode: 46, bubbles: true }),
+      );
+      node.dispatchEvent(new InputEvent("beforeinput", { data: secret, inputType: "insertText", bubbles: true }));
+    }
+    d.stop();
+    const report = d.exportJson();
+    const memory = JSON.stringify((d as unknown as { rows: unknown }).rows);
+    const count = JSON.parse(report).rows.length;
+    t.textarea!.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", keyCode: 16, bubbles: true }));
+    const afterStop = JSON.parse(d.exportJson()).rows.length;
+    cleanup.forEach((fn) => fn());
+    nodes.forEach((n) => n.remove());
+    const staleFocus = d.focusTarget("plain-input");
+    d.start("abc");
+    d.stop();
+    const next = JSON.parse(d.exportJson());
+    return { focuses, report, memory, count, afterStop, staleFocus, next };
+  });
+  expect(result.focuses).toEqual([true, true, true, true]);
+  expect(result.report + result.memory).not.toContain("PRIVATE_SENTINEL");
+  const report = JSON.parse(result.report);
+  expect(report.schema).toBe(2);
+  for (const row of report.rows.filter((r: Row) => r.event.startsWith("keypress:"))) {
+    expect(row.fields).toMatchObject({
+      key: "redacted",
+      code: "redacted",
+      keyCode: null,
+      which: null,
+      prototypeKeyCode: null,
+    });
+  }
+  for (const target of ["plain-input", "plain-textarea", "styled-textarea", "terminal"]) {
+    const rows = report.rows.filter((r: Row) => r.event.startsWith("keydown:") && r.fields.target === target);
+    expect(rows[0].event).toBe("keydown:window-early");
+    expect(
+      rows.every(
+        (r: Row) =>
+          r.fields.order === rows[0].fields.order &&
+          r.fields.keyCode === 16 &&
+          r.fields.prototypeKeyCode === 16 &&
+          !r.fields.ownKeyCode,
+      ),
+    ).toBe(true);
+    expect(rows.some((r: Row) => r.event === "keydown:target-capture")).toBe(true);
+  }
+  expect(result.afterStop).toBe(result.count);
+  expect(result.staleFocus).toBe(false);
+  expect(result.next.rows).toHaveLength(1);
+  expect(result.next.label).toBe("abc");
+});

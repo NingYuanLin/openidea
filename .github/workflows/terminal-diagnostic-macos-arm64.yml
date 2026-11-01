@@ -67,7 +67,7 @@ jobs:
             hdiutil verify "$dmg"
             hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
             trap 'hdiutil detach "$mountpoint" || true' EXIT
-            app="$mountpoint/OpenIDEA Terminal Diagnostic.app"
+            app="$mountpoint/OpenIDEA Terminal Diagnostic v2.app"
             file "$app/Contents/MacOS/openidea"
             test "$(lipo -archs "$app/Contents/MacOS/openidea")" = arm64
             codesign --verify --deep --strict --verbose=2 "$app"
@@ -81,7 +81,7 @@ jobs:
           printf 'Build commit: %s\nTest profile: opt-level=1, lto=false, codegen-units=16\nAd-hoc signed, not notarized. Diagnostic original baseline f48cd85d; stock xterm 6.0.0. Native IME evidence not simulated by automated tests.\n' "$GITHUB_SHA" > COMMIT.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenIDEA-terminal-diagnostic-macOS-ARM64
+          name: OpenIDEA-terminal-diagnostic-v2-macOS-ARM64
           path: test-artifacts/
           if-no-files-found: error
           retention-days: 14
