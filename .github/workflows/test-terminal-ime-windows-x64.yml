@@ -1,0 +1,136 @@
+name: Terminal IME Windows x64 installer
+on:
+  push:
+    branches: [test/terminal-ime-windows-x64-20261101]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: terminal-ime-windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify public fork, x64 runner and unchanged application source
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if ($env:GITHUB_REPOSITORY -ne 'NingYuanLin/openidea') { throw 'Unexpected repository' }
+          if ($env:REPOSITORY_PRIVATE -ne 'false') { throw 'Expected public fork' }
+          if ($env:RUNNER_ARCH -ne 'X64' -or -not [Environment]::Is64BitProcess) { throw 'Expected x64 runner' }
+          Write-Output "Runner architecture: $env:RUNNER_ARCH"
+          git merge-base --is-ancestor 8f1caf1c27053889134fef6afaede9b41b1836a0 HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Missing delivered terminal fix' }
+          git diff --exit-code 8f1caf1c27053889134fef6afaede9b41b1836a0 HEAD -- . ':(exclude).github/workflows/test-terminal-ime-windows-x64.yml'
+          if ($LASTEXITCODE -ne 0) { throw 'Application source differs from delivered fix' }
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: x86_64-pc-windows-msvc }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: terminal-ime-test-x86_64-pc-windows-msvc
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Validate terminal regression and types
+        run: |
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec tsc --noEmit -p e2e/tsconfig.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec vitest run src/features/terminal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec playwright test --config playwright.terminal.config.ts --project chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build unsigned NSIS test installer
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP 'terminal-windows-test.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8NoBOM $config
+          pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --config $config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check generated source files
+        run: git diff --exit-code
+      - name: Verify installer contents, architecture, signatures and hashes
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force test-artifacts | Out-Null
+          $installers = @(Get-ChildItem 'target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          $installer = $installers[0]
+          Copy-Item $installer.FullName test-artifacts/
+          $builtApp = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/openidea.exe').Path
+          $extractDir = Join-Path $env:RUNNER_TEMP 'terminal-installer-extracted'
+          & 'C:/Program Files/7-Zip/7z.exe' x $installer.FullName "-o$extractDir" -y
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS extraction failed' }
+          $apps = @(Get-ChildItem $extractDir -Filter openidea.exe -Recurse)
+          if ($apps.Count -ne 1) { throw 'Expected one embedded openidea.exe' }
+          $packagedApp = $apps[0].FullName
+          $builtHash = (Get-FileHash $builtApp -Algorithm SHA256).Hash
+          $packagedHash = (Get-FileHash $packagedApp -Algorithm SHA256).Hash
+          if ($builtHash -ne $packagedHash) { throw 'Installer application differs from built executable' }
+          $stream = [IO.File]::OpenRead($packagedApp)
+          $reader = [IO.BinaryReader]::new($stream)
+          try {
+            if ($reader.ReadUInt16() -ne 0x5A4D) { throw 'Missing DOS executable header' }
+            $stream.Position = 0x3C
+            $peOffset = $reader.ReadUInt32()
+            $stream.Position = $peOffset
+            if ($reader.ReadUInt32() -ne 0x4550) { throw 'Missing PE header' }
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x8664) { throw "Expected AMD64 payload; machine=$machine" }
+          } finally {
+            $reader.Dispose()
+            $stream.Dispose()
+          }
+          $installerSignature = (Get-AuthenticodeSignature $installer.FullName).Status.ToString()
+          $appSignature = (Get-AuthenticodeSignature $packagedApp).Status.ToString()
+          if ($installerSignature -ne 'NotSigned' -or $appSignature -ne 'NotSigned') { throw 'Unexpected signature status for unsigned test package' }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Tee-Object -FilePath test-artifacts/SHA256SUMS.txt
+          $verification = [ordered]@{
+            buildCommit = $env:GITHUB_SHA
+            applicationCommit = '8f1caf1c27053889134fef6afaede9b41b1836a0'
+            upstreamBase = 'f48cd85d0b2e6bc11b4661ab483b8c64887272a5'
+            runner = 'windows-2022'
+            runnerArchitecture = $env:RUNNER_ARCH
+            installer = $installer.Name
+            installerBytes = $installer.Length
+            installerSha256 = $hash
+            payloadMachine = '0x8664 (AMD64)'
+            payloadSha256 = $packagedHash.ToLowerInvariant()
+            payloadMatchesBuild = $true
+            installerSignature = $installerSignature
+            applicationSignature = $appSignature
+            optimization = 'opt-level=1; lto=false; codegen-units=16'
+            nativeImeVerified = $false
+            webview2 = 'Existing Tauri default: download bootstrapper if runtime is missing'
+          }
+          $verification | ConvertTo-Json | Tee-Object -FilePath test-artifacts/VERIFICATION.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenIDEA-terminal-ime-Windows-x64-test
+          path: test-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: terminal-ime-windows-test-failures
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
