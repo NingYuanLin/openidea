@@ -81,7 +81,24 @@ jobs:
           $packagedApp = $apps[0].FullName
           $builtHash = (Get-FileHash $builtApp -Algorithm SHA256).Hash
           $packagedHash = (Get-FileHash $packagedApp -Algorithm SHA256).Hash
-          if ($builtHash -ne $packagedHash) { throw 'Installer application differs from built executable' }
+          # Tauri CLI 2.12.3 patches the first bundle-type marker for NSIS, then
+          # restores the original build file. Verify exactly that transformation.
+          # https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.3/crates/tauri-bundler/src/bundle.rs
+          $env:VERIFY_BUILT_APP = $builtApp
+          $env:VERIFY_PACKAGED_APP = $packagedApp
+          @'
+          import hashlib, os, pathlib
+          original = pathlib.Path(os.environ["VERIFY_BUILT_APP"]).read_bytes()
+          packaged = pathlib.Path(os.environ["VERIFY_PACKAGED_APP"]).read_bytes()
+          marker = b"__TAURI_BUNDLE_TYPE_VAR_UNK"
+          replacement = b"__TAURI_BUNDLE_TYPE_VAR_NSS"
+          offset = original.find(marker)
+          assert offset >= 0, "Original Tauri bundle marker missing"
+          expected = original[:offset] + replacement + original[offset + len(marker):]
+          assert packaged == expected, "Installer payload differs beyond the expected NSIS bundle marker"
+          print(f"Verified exact NSIS payload: marker offset={offset}, sha256={hashlib.sha256(packaged).hexdigest()}")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Installer payload verification failed' }
           $stream = [IO.File]::OpenRead($packagedApp)
           $reader = [IO.BinaryReader]::new($stream)
           try {
@@ -112,7 +129,9 @@ jobs:
             installerSha256 = $hash
             payloadMachine = '0x8664 (AMD64)'
             payloadSha256 = $packagedHash.ToLowerInvariant()
-            payloadMatchesBuild = $true
+            rawBuildSha256 = $builtHash.ToLowerInvariant()
+            payloadMatchesExpectedNsisBinary = $true
+            bundleMarkerTransformation = 'First __TAURI_BUNDLE_TYPE_VAR_UNK -> __TAURI_BUNDLE_TYPE_VAR_NSS; all other bytes identical'
             installerSignature = $installerSignature
             applicationSignature = $appSignature
             optimization = 'opt-level=1; lto=false; codegen-units=16'
