@@ -33,6 +33,7 @@ import {
 } from "./store";
 import { pasteTerminalClipboard } from "./paste";
 import { TerminalFindBar } from "./FindBar";
+import { DiagnosticControls } from "./DiagnosticControls";
 import styles from "./Terminal.module.css";
 
 const TAB_PREFIX = "openidea-terminal";
@@ -70,6 +71,7 @@ function TerminalPane({ sessionKey, autofocus }: { sessionKey: string; autofocus
       }}
       onContextMenu={(e) => paneMenu(e, sessionKey)}
     >
+      {getSession(sessionKey) && <DiagnosticControls diagnostic={getSession(sessionKey)!.diagnostic} />}
       <div className={styles.paneActions} role="toolbar" aria-label="Terminal actions">
         <IconButton
           icon="arrow-down"

@@ -13,6 +13,7 @@ import { editorService, notifications } from "@/workbench/contributions";
 import { fitScheduler, settledResize } from "./fit";
 import { installTerminalPaste, pasteTerminalClipboard } from "./paste";
 import { ImeCommitGate } from "./imeCommit";
+import { TerminalDiagnostic } from "./diagnostic";
 import { findTerminalLinks, resolvePath, type TerminalLink } from "./links";
 import { splitCommandLine } from "@/platform/commandLine";
 import { useProject } from "@/platform/project";
@@ -185,6 +186,8 @@ export class TerminalSession {
     if (this.term.textarea) this.term.textarea.value = "";
   });
 
+  readonly diagnostic: TerminalDiagnostic;
+
   constructor(opts: SessionOptions) {
     this.opts = opts;
     this.key = opts.key;
@@ -229,6 +232,7 @@ export class TerminalSession {
       theme: readTerminalTheme(),
       linkHandler: LINK_HANDLER,
     });
+    this.diagnostic = new TerminalDiagnostic(this.term);
     this.term.loadAddon(this.fit);
     this.term.loadAddon(this.searchAddon);
 
@@ -625,6 +629,7 @@ export class TerminalSession {
 
   dispose() {
     if (this.disposed) return;
+    this.diagnostic.dispose();
     this.disposed = true;
     this.fitter.cancel();
     this.ptyResize.cancel();

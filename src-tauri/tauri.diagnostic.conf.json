@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenIDEA Terminal Diagnostic",
+  "identifier": "ai.l0ng.openidea.terminal-diagnostic",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "shortDescription": "Opt-in terminal Sogou diagnostic, original baseline f48cd85d",
+    "macOS": { "signingIdentity": "-" }
+  },
+  "plugins": { "updater": { "endpoints": [] } }
+}
