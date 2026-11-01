@@ -44,10 +44,12 @@ test("four targets focus in one document, keyboard navigation and discard protec
     await page.keyboard.press("ShiftRight");
     await expect(page.locator(selector).first()).toBeFocused();
   }
-  const first = controls.getByRole("button", { name: /聚焦 1/ });
-  await first.focus();
+  // macOS WebKit can skip buttons unless Keyboard Navigation is enabled.
+  // Enter activation of every focus button is checked above; Tab must still
+  // navigate the ordinary text fields without assuming a runner OS preference.
+  await controls.getByLabel("普通输入框对照").focus();
   await page.keyboard.press("Tab");
-  await expect(controls.getByRole("button", { name: /聚焦 2/ })).toBeFocused();
+  await expect(controls.getByLabel("普通多行框对照")).toBeFocused();
   await controls.getByRole("button", { name: "停止", exact: true }).click();
   await controls.getByRole("button", { name: "开始新采样" }).click();
   await expect(controls.getByRole("alert")).toBeVisible();
