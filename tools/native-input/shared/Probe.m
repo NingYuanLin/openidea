@@ -34,7 +34,7 @@ static NSDictionary *safeDOM(NSDictionary *b) {
 @property(nonatomic,weak) id trackedContext;
 @property(nonatomic) Class hookedClass;
 @property(nonatomic) IMP original;
-@property(nonatomic) BOOL advanced;
+@property(nonatomic) BOOL advanced, selfTestAwaitingClose;
 - (void)record:(NSDictionary *)record;
 - (NSDictionary *)nativeEvent:(NSEvent *)event source:(NSString *)source;
 - (void)start:(NSString *)label advanced:(BOOL)advanced;
@@ -78,7 +78,7 @@ static BOOL supportedMethod(Method m) {
 - (void)attach:(WKWebView *)webview {
  self.webview=webview;[webview.configuration.userContentController addScriptMessageHandler:self name:@"nativeDiagnostic"];
  __weak OIProbe *weak=self;
- self.closeObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification object:webview.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){[weak stop];}];
+ self.closeObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification object:webview.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){(void)n;OIProbe *p=weak;[p stop];if(p.selfTestAwaitingClose){if(p.active || p.monitor){fprintf(stderr,"FAIL native smoke close cleanup\n");exit(17);}printf("PASS packaged host page/focus/default-off/private-off/native-flagsChanged/DOM/redaction/export-cancel/restart/close; synthetic only\n");fflush(stdout);exit(0);}}];
  NSURL *html=[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html"];
  NSString *content=[NSString stringWithContentsOfURL:html encoding:NSUTF8StringEncoding error:nil];
  [webview loadHTMLString:content?:@"<h1>Missing diagnostic page</h1>" baseURL:nil];
@@ -181,9 +181,9 @@ static void selfTest(OIProbe *probe) {
  if(p.active || p.monitor){fprintf(stderr,"FAIL native smoke export did not stop\n");exit(15);}
  NSString *text=[[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:[p snapshot] options:0 error:nil] encoding:NSUTF8StringEncoding];
  if([text containsString:@"SECRET_SENTINEL"]){fprintf(stderr,"FAIL native smoke privacy\n");exit(16);}
- [p start:@"abc" advanced:NO];[p.webview.window performClose:nil];
- if(p.active){fprintf(stderr,"FAIL native smoke close cleanup\n");exit(17);}
- printf("PASS packaged host page/focus/default-off/private-off/native-flagsChanged/DOM/redaction/export-cancel/restart/close; synthetic only\n");fflush(stdout);exit(0);
+ [p start:@"abc" advanced:NO];p.selfTestAwaitingClose=YES;[p.webview.window performClose:nil];
+ // Tao queues CloseRequested and returns NO from windowShouldClose. The close
+ // observer asserts cleanup when the actual notification arrives, within timeout.
  });});});}];});
  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_SEC),dispatch_get_main_queue(),^{fprintf(stderr,"FAIL native smoke timeout\n");exit(18);});
 }
