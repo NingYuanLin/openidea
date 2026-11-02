@@ -181,7 +181,14 @@ static void selfTest(OIProbe *probe) {
  if(p.active || p.monitor){fprintf(stderr,"FAIL native smoke export did not stop\n");exit(15);}
  NSString *text=[[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:[p snapshot] options:0 error:nil] encoding:NSUTF8StringEncoding];
  if([text containsString:@"SECRET_SENTINEL"]){fprintf(stderr,"FAIL native smoke privacy\n");exit(16);}
+ [p start:@"abc" advanced:YES];
+ NSEvent *advancedEvent=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:NSEventModifierFlagShift timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:p.webview.window.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:56];
+ [NSApp postEvent:advancedEvent atStart:NO];
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+ printf("Real system private probe availability: %s; observed calls=%lu; pending=%lu (synthetic Shift, not Sogou)\n",p.capability.UTF8String,(unsigned long)p.calls.count,(unsigned long)[p pending]);
+ [p stop];if(p.hookedClass || p.monitor){fprintf(stderr,"FAIL real private probe teardown\n");exit(19);}
  [p start:@"abc" advanced:NO];p.selfTestAwaitingClose=YES;[p.webview.window performClose:nil];
+ });
  // Tao queues CloseRequested and returns NO from windowShouldClose. The close
  // observer asserts cleanup when the actual notification arrives, within timeout.
  });});});}];});
