@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"
+  />
+  <title>Shift 原生对照 v3</title>
+  <style>
+    body {
+      font: 17px system-ui;
+      margin: 32px;
+      max-width: 850px;
+      color: #172334;
+      background: #f6f8fb;
+    }
+    h1 {
+      font-size: 26px;
+    }
+    section {
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      margin: 16px 0;
+    }
+    button,
+    select,
+    input {
+      font: inherit;
+      padding: 10px;
+      margin: 6px 4px;
+    }
+    #sample {
+      width: 85%;
+      border: 2px solid #687b96;
+    }
+    #state {
+      font-weight: 700;
+      color: #9b3413;
+    }
+    small {
+      display: block;
+      line-height: 1.7;
+      color: #526174;
+    }
+    label {
+      display: block;
+    }
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid #2563eb;
+    }
+    #host {
+      font-weight: 600;
+    }
+  </style>
+  <h1>Shift 原生对照 v3</h1>
+  <p id="host">正在读取宿主…</p>
+  <small>这是独立实验，不是 OpenIDEA 修复版。请分别在两个应用测试同一种输入法。程序不会自动切换或识别输入法。</small>
+  <section>
+    <label
+      >当前手动选择的输入法：<select id="ime">
+        <option value="builtin-chinese">系统中文</option>
+        <option value="sogou-chinese">搜狗中文</option>
+        <option value="sogou-english">搜狗英文</option>
+        <option value="abc">ABC</option>
+      </select></label
+    >
+    <label><input type="checkbox" id="privateProbe" />启用高级输入法回调探针（可选；先保持关闭）</label>
+    <small
+      >默认只观察本应用的 Shift
+      原生事件和页面事件。高级探针会临时包装输入上下文方法，可能影响时序；不支持时明确降级。</small
+    >
+    <button id="start">开始并聚焦输入框</button><button id="stop" disabled>停止</button
+    ><button id="export" disabled>停止并导出 JSON</button>
+    <p id="state" role="status">未采集</p>
+    <p id="capability"></p>
+    <label for="sample">在这里按一下左 Shift、松开，再按一下右 Shift、松开：</label
+    ><input id="sample" type="text" autocomplete="off" spellcheck="false" aria-label="Shift 对照输入框" />
+    <small
+      >无需输入文字。先切好输入法，再点“开始”。导出后在另一个应用重复同样操作。输入框外的 Shift 不计入页面记录。</small
+    >
+  </section>
+  <small
+    >仅内存保存，最多6000条，达到上限自动停止。不会保存输入文字、剪贴板、命令或个人路径，不自动上传。导出是本地明文
+    JSON，包含宿主、系统版本与输入法手动标签。高级回调没有到达时记为 pending，绝不当作 false。</small
+  >
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      let active = false,
+        dirty = false,
+        order = 0;
+      const send = (body) => window.webkit?.messageHandlers?.nativeDiagnostic?.postMessage(body);
+      window.nativeStatus = (s) => {
+        active = s.active;
+        dirty = s.count > 0;
+        $("host").textContent = s.host + " · v3 · " + s.commit;
+        $("state").textContent = (active ? "正在采集" : "已停止") + " · " + s.count + " 条 · 丢弃 " + s.dropped + " 条";
+        $("capability").textContent = "高级回调：" + s.capability + "；未完成调用：" + s.pending;
+        $("start").disabled = active;
+        $("stop").disabled = !active;
+        $("export").disabled = !dirty;
+        $("privateProbe").disabled = active;
+        $("ime").disabled = active;
+      };
+      $("start").onclick = () => {
+        if (dirty && !confirm("重新开始会清空上一轮记录。已导出或确定放弃吗？")) return;
+        $("sample").focus();
+        send({ op: "start", label: $("ime").value, advanced: $("privateProbe").checked });
+      };
+      $("stop").onclick = () => send({ op: "stop" });
+      $("export").onclick = () => send({ op: "export" });
+      for (const type of ["keydown", "keyup"])
+        window.addEventListener(
+          type,
+          (e) => {
+            if (
+              !active ||
+              e.target !== $("sample") ||
+              e.key !== "Shift" ||
+              !["ShiftLeft", "ShiftRight"].includes(e.code)
+            )
+              return;
+            const getter = Object.getOwnPropertyDescriptor(KeyboardEvent.prototype, "keyCode")?.get;
+            let prototypeCode = null;
+            try {
+              const v = getter?.call(e);
+              if (v === 16 || v === 229) prototypeCode = v;
+            } catch {}
+            send({
+              op: "dom",
+              type,
+              code: e.code,
+              keyCode: [16, 229].includes(e.keyCode) ? e.keyCode : null,
+              prototypeCode,
+              ownCode: Object.hasOwn(e, "keyCode"),
+              trusted: e.isTrusted,
+              composing: e.isComposing,
+              shift: e.shiftKey,
+              ctrl: e.ctrlKey,
+              alt: e.altKey,
+              meta: e.metaKey,
+              phase: e.eventPhase,
+              pageMs: performance.now(),
+              order: ++order,
+              length: $("sample").value.length,
+            });
+          },
+          true,
+        );
+      for (const type of ["beforeinput", "input", "compositionstart", "compositionupdate", "compositionend"])
+        window.addEventListener(
+          type,
+          (e) => {
+            if (active && e.target === $("sample"))
+              send({
+                op: "text-state",
+                type,
+                pageMs: performance.now(),
+                length: typeof e.data === "string" ? e.data.length : 0,
+                targetLength: $("sample").value.length,
+              });
+          },
+          true,
+        );
+      addEventListener("pagehide", () => send({ op: "stop" }));
+      send({ op: "status" });
+    })();
+  </script>
+</html>

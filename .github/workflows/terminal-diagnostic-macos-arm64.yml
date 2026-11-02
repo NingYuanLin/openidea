@@ -2,6 +2,12 @@ name: Terminal Sogou Diagnostic macOS ARM64 DMG
 on:
   push:
     branches: [diagnostic/terminal-sogou-macos-arm64-20261101]
+    paths-ignore:
+      [
+        "tools/native-input/**",
+        ".github/workflows/native-input-comparison-macos-arm64.yml",
+        ".github/workflows/terminal-diagnostic-macos-arm64.yml",
+      ]
   workflow_dispatch:
 permissions:
   contents: read

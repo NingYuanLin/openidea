@@ -1,0 +1,18 @@
+[package]
+name = "shift-native-tauri"
+version = "0.3.0"
+edition = "2021"
+[workspace]
+[dependencies]
+tauri = { version = "=2.12.4", features = [] }
+tauri-runtime-wry = "=2.12.2"
+wry = "=0.57.0"
+tao = "=0.37.1"
+[build-dependencies]
+tauri-build = "=2.7.3"
+cc = "1"
+[profile.release]
+opt-level = 1
+lto = false
+codegen-units = 16
+strip = false

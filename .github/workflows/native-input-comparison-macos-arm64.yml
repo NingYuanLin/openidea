@@ -1,0 +1,62 @@
+name: Native Shift Host Comparison v3 ARM64
+on:
+  push:
+    branches: [diagnostic/terminal-sogou-macos-arm64-20261101]
+    paths: ["tools/native-input/**", ".github/workflows/native-input-comparison-macos-arm64.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-input-comparison-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  compare:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public fork and ARM runner
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          test "$GITHUB_REPOSITORY" = NingYuanLin/openidea
+          test "$REPOSITORY_PRIVATE" = false
+          test "$(uname -m)" = arm64
+          sw_vers
+          xcodebuild -version
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/native-input/tauri
+          key: native-comparison-v3-arm64
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - run: pnpm install --frozen-lockfile
+      - name: Page privacy and interaction regression
+        run: |
+          pnpm exec playwright install chromium
+          node tools/native-input/test-page.mjs
+      - name: Native tests, build, packaged smoke, signature and DMG verification
+        run: bash tools/native-input/build-macos.sh
+      - name: Verify generated source clean
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shift-Native-Comparison-v3-macOS-ARM64
+          path: |
+            tools/native-input/out/*.dmg
+            tools/native-input/out/*.txt
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-comparison-v3-failure-logs
+          path: tools/native-input/out/*.txt
+          if-no-files-found: ignore
