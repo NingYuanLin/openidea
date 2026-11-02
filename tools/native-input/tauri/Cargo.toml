@@ -3,6 +3,9 @@ name = "shift-native-tauri"
 version = "0.3.0"
 edition = "2021"
 [workspace]
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 [dependencies]
 tauri = { version = "=2.12.4", features = [] }
 tauri-runtime-wry = "=2.12.2"

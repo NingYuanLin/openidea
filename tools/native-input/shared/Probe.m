@@ -49,7 +49,8 @@ typedef void (*InputIMP)(id, SEL, NSEvent *, void (^)(BOOL));
 // No second invocation, synchronous wait, synthetic callback, or callback suppression.
 static void observeInput(id self, SEL cmd, NSEvent *event, void (^completion)(BOOL)) {
  Class cls=object_getClass(self); IMP imp=NULL;
- for(Class c=cls;c && !imp;c=class_getSuperclass(c))imp=[originals[[NSValue valueWithPointer:(__bridge const void *)c]] pointerValue];
+ @synchronized(OIProbe.class){for(Class c=cls;c && !imp;c=class_getSuperclass(c))imp=[originals[[NSValue valueWithPointer:(__bridge const void *)c]] pointerValue];}
+ if(!NSThread.isMainThread){((InputIMP)imp)(self,cmd,event,completion);return;}
  OIProbe *p=activeProbe;
  if(!p.active || self!=p.trackedContext || !shiftEvent(event) || !NSThread.isMainThread) { ((InputIMP)imp)(self,cmd,event,completion); return; }
  p.capability=@"installed-observed-entry";
@@ -107,8 +108,8 @@ static BOOL supportedMethod(Method m) {
  Method own=NULL;unsigned int count=0;Method *methods=class_copyMethodList(cls,&count);
  for(unsigned int i=0;i<count;i++)if(method_getName(methods[i])==sel)own=methods[i];free(methods);
  if(!own){self.capability=@"unavailable-own-method-slot";return;}
- if(!originals)originals=[NSMutableDictionary dictionary];
- originals[[NSValue valueWithPointer:(__bridge const void *)cls]]=[NSValue valueWithPointer:original];
+ @synchronized(OIProbe.class){if(!originals)originals=[NSMutableDictionary dictionary];
+ originals[[NSValue valueWithPointer:(__bridge const void *)cls]]=[NSValue valueWithPointer:original];}
  self.trackedContext=context;self.hookedClass=cls;self.original=original;activeProbe=self;
  method_setImplementation(own,(IMP)observeInput);self.capability=@"installed-awaiting-observation";
 }
@@ -130,7 +131,7 @@ static BOOL supportedMethod(Method m) {
 - (NSUInteger)pending {NSUInteger n=0;for(NSNumber *v in self.calls.allValues)if(v.unsignedIntegerValue==0)n++;return n;}
 - (NSDictionary *)snapshot {
  NSBundle *wk=[NSBundle bundleForClass:WKWebView.class];
- return @{@"schema":@3,@"diagnostic":@"native-shift-host-comparison-v3",@"commit":@OI_COMMIT,@"htmlSHA256":@OI_HTML_SHA,@"host":self.host,@"bundleID":NSBundle.mainBundle.bundleIdentifier?:@"unknown",@"osVersion":NSProcessInfo.processInfo.operatingSystemVersionString,@"webKitBundleVersion":[wk objectForInfoDictionaryKey:@"CFBundleVersion"]?:@"unknown",@"tauriVersion":[self.host isEqual:@"tauri"]?@"2.12.4":@"not-used",@"wryVersion":[self.host isEqual:@"tauri"]?@"0.57.0":@"not-used",@"inputMethodManualLabel":self.label,@"inputMethodAutomaticallyDetected":@NO,@"advancedRequested":@(self.advanced),@"inputContextProbe":self.capability,@"pendingCallbacks":@([self pending]),@"callbackCounts":self.calls,@"limit":@(Limit),@"dropped":@(self.dropped),@"active":@(self.active),@"clockNote":@"nativeReceiveMs is relative native uptime; eventUptimeMs/callbackUptimeMs are absolute monotonic uptime; pageMs is a separate clock. DOM/native correlation is temporal inference, not object identity. Shift flags are aggregate, not per-side release state.",@"rows":self.rows};
+ return @{@"schema":@3,@"diagnostic":@"native-shift-host-comparison-v3",@"commit":@OI_COMMIT,@"htmlSHA256":@OI_HTML_SHA,@"host":self.host,@"bundleID":NSBundle.mainBundle.bundleIdentifier?:@"unknown",@"osVersion":NSProcessInfo.processInfo.operatingSystemVersionString,@"webKitBundleVersion":[wk objectForInfoDictionaryKey:@"CFBundleVersion"]?:@"unknown",@"tauriVersion":[self.host isEqual:@"tauri"]?@"2.12.4":@"not-used",@"wryVersion":[self.host isEqual:@"tauri"]?@"0.57.0":@"not-used",@"inputMethodManualLabel":self.label,@"inputMethodAutomaticallyDetected":@NO,@"advancedRequested":@(self.advanced),@"inputContextProbe":self.capability,@"observations":@{@"nativeShift":@"application-local-monitor",@"wkResponderEntry":@"not-instrumented",@"inputContextCompletion":self.capability,@"inputContextOffMainEntry":@"forwarded-unobserved",@"DOM":@"window-capture"},@"pendingCallbacks":@([self pending]),@"callbackCounts":self.calls,@"limit":@(Limit),@"dropped":@(self.dropped),@"active":@(self.active),@"clockNote":@"nativeReceiveMs is relative native uptime; eventUptimeMs/callbackUptimeMs are absolute monotonic uptime; pageMs is a separate clock. DOM/native correlation is temporal inference, not object identity. Shift flags are aggregate, not per-side release state.",@"rows":self.rows};
 }
 - (void)status {
  if(!self.webview)return;
