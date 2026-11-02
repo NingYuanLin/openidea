@@ -10,6 +10,7 @@ fn main() {
             .define("OI_COMMIT", commit.as_str())
             .define("OI_HTML_SHA", html.as_str())
             .compile("shift_probe");
+        println!("cargo:rustc-link-lib=framework=Carbon");
         println!("cargo:rustc-link-lib=framework=Cocoa");
         println!("cargo:rustc-link-lib=framework=WebKit");
     }

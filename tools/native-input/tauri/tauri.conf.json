@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Shift Native Tauri v3",
-  "version": "0.3.0",
-  "identifier": "ai.l0ng.openidea.shift-native.tauri-v3",
+  "productName": "Shift Native Tauri v4",
+  "version": "0.4.0",
+  "identifier": "ai.l0ng.openidea.shift-native.tauri-v4",
   "build": {
     "frontendDist": "ui"
   },
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Shift Native v3 — Tauri 2.12.4 / Wry 0.57.0",
+        "title": "Shift Native v4 — Tauri 2.12.4 / Wry 0.57.0",
         "width": 940,
         "height": 760
       }

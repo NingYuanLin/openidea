@@ -1,4 +1,4 @@
-name: Native Shift Host Comparison v3 ARM64
+name: Native Shift Host Comparison v4 ARM64
 on:
   push:
     branches: [diagnostic/terminal-sogou-macos-arm64-20261101]
@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   compare:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: 0
@@ -31,7 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/native-input/tauri
-          key: native-comparison-v3-arm64
+          key: native-comparison-v4-arm64
           cache-on-failure: true
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
@@ -48,7 +48,7 @@ jobs:
         run: git diff --exit-code
       - uses: actions/upload-artifact@v4
         with:
-          name: Shift-Native-Comparison-v3-macOS-ARM64
+          name: Shift-Native-Comparison-v4-macOS-ARM64
           path: |
             tools/native-input/out/*.dmg
             tools/native-input/out/*.txt
@@ -57,6 +57,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: native-comparison-v3-failure-logs
+          name: native-comparison-v4-failure-logs
           path: tools/native-input/out/*.txt
           if-no-files-found: ignore

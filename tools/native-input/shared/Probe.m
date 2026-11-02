@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <math.h>
+#import <Carbon/Carbon.h>
 #ifndef OI_COMMIT
 #define OI_COMMIT "development"
 #endif
@@ -23,23 +24,48 @@ static NSDictionary *safeDOM(NSDictionary *b) {
  for(NSString *k in @[@"phase",@"pageMs",@"order",@"length"])r[k]=number(b[k]);
  return r;
 }
+// Only these fixed categories leave this function. Never buffer a raw input-source ID/name.
+static NSString *sourceFamily(id identifier, id bundle) {
+    NSString *i=[identifier isKindOfClass:NSString.class]?[identifier lowercaseString]:@"";
+    NSString *b=[bundle isKindOfClass:NSString.class]?[bundle lowercaseString]:@"";
+    if([i isEqual:@"com.apple.keylayout.abc"])return @"abc";
+    if([i hasPrefix:@"com.apple.inputmethod.scim."] || [i hasPrefix:@"com.apple.inputmethod.tcim."] || [b isEqual:@"com.apple.inputmethod.scim"] || [b isEqual:@"com.apple.inputmethod.tcim"])return @"builtin-chinese";
+    if([i hasPrefix:@"com.sogou.inputmethod."] || [b hasPrefix:@"com.sogou.inputmethod."])return @"sogou";
+    return @"unknown";
+}
+static NSString *currentSourceFamily(void) {
+    TISInputSourceRef source=TISCopyCurrentKeyboardInputSource();
+    if(!source)return @"unknown";
+    CFTypeRef identifier=TISGetInputSourceProperty(source,kTISPropertyInputSourceID);
+    CFTypeRef bundle=TISGetInputSourceProperty(source,kTISPropertyBundleID);
+    NSString *family=sourceFamily(identifier && CFGetTypeID(identifier)==CFStringGetTypeID()?(__bridge id)identifier:nil,bundle && CFGetTypeID(bundle)==CFStringGetTypeID()?(__bridge id)bundle:nil);
+    CFRelease(source);return family;
+}
 @interface OIProbe ()
-@property(nonatomic) BOOL active;
-@property(nonatomic) NSUInteger generation, dropped, nextEvent, nextCall;
-@property(nonatomic) double startTime;
+@property(nonatomic) BOOL active, advanced, focusConfirmed, focusQueryInFlight, everReady;
+@property(nonatomic) BOOL selfTestAwaitingClose;
+@property(nonatomic) NSUInteger generation, epoch, dropped, nextEvent, nextCall, contextChecks, focusRevision;
+@property(nonatomic) double startTime, deadline;
+@property(nonatomic,strong) NSNumber *firstReadyMs, *installedMs;
 @property(nonatomic,strong) NSMutableArray *rows;
 @property(nonatomic,strong) NSMutableDictionary *calls;
 @property(nonatomic,strong) NSMapTable *eventIDs;
 @property(nonatomic,strong) id monitor, closeObserver;
-@property(nonatomic,copy) NSString *host, *label, *capability;
+@property(nonatomic,strong) NSTimer *readinessTimer;
+@property(nonatomic,copy) NSString *host, *label, *capability, *state, *endState, *sessionID, *sourceAtStart;
 @property(nonatomic,weak) id trackedContext;
 @property(nonatomic) Class hookedClass;
 @property(nonatomic) IMP original;
-@property(nonatomic) BOOL advanced, selfTestAwaitingClose;
+- (BOOL)ready;
 - (void)record:(NSDictionary *)record;
 - (NSDictionary *)nativeEvent:(NSEvent *)event source:(NSString *)source;
 - (void)start:(NSString *)label advanced:(BOOL)advanced;
+- (void)advanceReadiness;
+- (void)requestFocusConfirmation;
+- (void)focusChanged:(BOOL)focused;
+- (void)detachHook;
 - (NSDictionary *)snapshot;
+- (NSString *)exportName;
 - (void)status;
 @end
 static void selfTest(OIProbe *probe);
@@ -47,155 +73,306 @@ static __weak OIProbe *activeProbe;
 static NSMutableDictionary<NSValue *,NSValue *> *originals;
 static SEL inputSelector(void) {return NSSelectorFromString(@"handleEventByInputMethod:completionHandler:");}
 typedef void (*InputIMP)(id, SEL, NSEvent *, void (^)(BOOL));
-// No second invocation, synchronous wait, synthetic callback, or callback suppression.
-static void observeInput(id self, SEL cmd, NSEvent *event, void (^completion)(BOOL)) {
- Class cls=object_getClass(self); IMP imp=NULL;
- @synchronized(OIProbe.class){for(Class c=cls;c && !imp;c=class_getSuperclass(c))imp=[originals[[NSValue valueWithPointer:(__bridge const void *)c]] pointerValue];}
- if(!NSThread.isMainThread){((InputIMP)imp)(self,cmd,event,completion);return;}
- OIProbe *p=activeProbe;
- if(!p.active || self!=p.trackedContext || !shiftEvent(event) || !NSThread.isMainThread) { ((InputIMP)imp)(self,cmd,event,completion); return; }
- p.capability=@"installed-observed-entry";
- NSUInteger generation=p.generation, call=++p.nextCall; NSString *callKey=[NSString stringWithFormat:@"%lu",(unsigned long)call];
- p.calls[callKey]=@0;
- NSMutableDictionary *entry=[[p nativeEvent:event source:@"input-context-enter"] mutableCopy];entry[@"call"]=@(call);[p record:entry];
- __weak OIProbe *weak=p;
- void (^forward)(BOOL)=completion ? ^(BOOL handled) {
-   double when=NSProcessInfo.processInfo.systemUptime; BOOL main=NSThread.isMainThread;
-   void (^log)(void)=^{OIProbe *s=weak;if(s.active && s.generation==generation){s.calls[callKey]=@([s.calls[callKey] unsignedIntegerValue]+1);[s record:@{@"source":@"input-context-completion",@"call":@(call),@"handled":@(handled),@"callbackUptimeMs":@(when*1000),@"callbackThread":main?@"main":@"other"}];}};
-   if(main)log();else dispatch_async(dispatch_get_main_queue(),log);
-   completion(handled);
- } : nil;
- ((InputIMP)imp)(self,cmd,event,forward);
+// Forward original invocation and every original callback once, on their original threads.
+static void observeInput(id receiver, SEL cmd, NSEvent *event, void (^completion)(BOOL)) {
+    IMP imp=NULL;
+    @synchronized(OIProbe.class) {
+        for(Class c=object_getClass(receiver);c && !imp;c=class_getSuperclass(c))
+            imp=[originals[[NSValue valueWithPointer:(__bridge const void *)c]] pointerValue];
+    }
+    if(!NSThread.isMainThread){((InputIMP)imp)(receiver,cmd,event,completion);return;}
+    OIProbe *p=activeProbe;
+    if(!p.active || !p.ready || receiver!=p.trackedContext || !shiftEvent(event)) {
+        ((InputIMP)imp)(receiver,cmd,event,completion);return;
+    }
+    NSUInteger generation=p.generation, epoch=p.epoch, call=++p.nextCall;
+    NSString *callKey=[NSString stringWithFormat:@"%lu",(unsigned long)call];
+    p.calls[callKey]=@0;
+    NSMutableDictionary *entry=[[p nativeEvent:event source:@"input-context-enter"] mutableCopy];
+    entry[@"call"]=@(call);[p record:entry];
+    __weak OIProbe *weak=p;
+    void (^forward)(BOOL)=completion ? ^(BOOL handled) {
+        double when=NSProcessInfo.processInfo.systemUptime;BOOL main=NSThread.isMainThread;
+        void (^log)(void)=^{
+            OIProbe *s=weak;
+            if(s.active && s.generation==generation && s.calls[callKey]) {
+                s.calls[callKey]=@([s.calls[callKey] unsignedIntegerValue]+1);
+                [s record:@{@"source":@"input-context-completion",@"call":@(call),@"handled":@(handled),
+                    @"callEpoch":@(epoch),@"sameReadyEpoch":@(s.ready && s.epoch==epoch),
+                    @"callbackUptimeMs":@(when*1000),@"callbackThread":main?@"main":@"other"}];
+            }
+        };
+        if(main)log();else dispatch_async(dispatch_get_main_queue(),log);
+        completion(handled);
+    } : nil;
+    ((InputIMP)imp)(receiver,cmd,event,forward);
 }
 static BOOL supportedMethod(Method m) {
- if(!m || method_getNumberOfArguments(m)!=4)return NO;
- char ret[32]={0}, event[32]={0}, block[32]={0};method_getReturnType(m,ret,32);method_getArgumentType(m,2,event,32);method_getArgumentType(m,3,block,32);
- return !strcmp(ret,"v") && event[0]=='@' && !strcmp(block,"@?");
+    if(!m || method_getNumberOfArguments(m)!=4)return NO;
+    char ret[32]={0},event[32]={0},block[32]={0};
+    method_getReturnType(m,ret,32);method_getArgumentType(m,2,event,32);method_getArgumentType(m,3,block,32);
+    return !strcmp(ret,"v") && event[0]=='@' && !strcmp(block,"@?");
 }
 @implementation OIProbe
 - (instancetype)initWithHost:(NSString *)host {
- if((self=[super init])){_host=host;_rows=[NSMutableArray array];_calls=[NSMutableDictionary dictionary];_capability=@"disabled";_label=@"unspecified";_eventIDs=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];}return self;
+    if((self=[super init])) {
+        _host=host;_rows=[NSMutableArray array];_calls=[NSMutableDictionary dictionary];
+        _capability=@"disabled";_state=@"idle";_endState=@"idle";_label=@"unselected";
+        _sessionID=@"none";_sourceAtStart=@"unknown";
+        _eventIDs=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];
+    }
+    return self;
 }
+- (BOOL)ready {return self.active && self.focusConfirmed && ([self.state isEqual:@"ready-baseline"] || [self.state isEqual:@"ready-advanced"]);}
 - (void)attach:(WKWebView *)webview {
- self.webview=webview;[webview.configuration.userContentController addScriptMessageHandler:self name:@"nativeDiagnostic"];
- __weak OIProbe *weak=self;
- self.closeObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification object:webview.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){(void)n;OIProbe *p=weak;[p stop];if(p.selfTestAwaitingClose){if(p.active || p.monitor){fprintf(stderr,"FAIL native smoke close cleanup\n");exit(17);}printf("PASS packaged host page/focus/default-off/private-off/native-flagsChanged/DOM/redaction/export-cancel/restart/close; synthetic only\n");fflush(stdout);exit(0);}}];
- NSURL *html=[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html"];
- NSString *content=[NSString stringWithContentsOfURL:html encoding:NSUTF8StringEncoding error:nil];
- [webview loadHTMLString:content?:@"<h1>Missing diagnostic page</h1>" baseURL:nil];
- if([NSProcessInfo.processInfo.arguments containsObject:@"--diagnostic-self-test"])selfTest(self);
+    self.webview=webview;[webview.configuration.userContentController addScriptMessageHandler:self name:@"nativeDiagnostic"];
+    __weak OIProbe *weak=self;
+    self.closeObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification object:webview.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
+        (void)n;OIProbe *p=weak;[p stop];
+        if(p.selfTestAwaitingClose) {
+            if(p.active || p.monitor || p.readinessTimer || p.hookedClass){fprintf(stderr,"FAIL close cleanup\n");exit(17);}
+            printf("PASS v4 packaged cold-start advanced readiness/callback/stop/baseline/export-cancel/close; synthetic only\n");fflush(stdout);exit(0);
+        }
+    }];
+    NSString *content=[NSString stringWithContentsOfURL:[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html"] encoding:NSUTF8StringEncoding error:nil];
+    [webview loadHTMLString:content?:@"<h1>Missing diagnostic page</h1>" baseURL:nil];
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--diagnostic-self-test"])selfTest(self);
 }
 - (void)record:(NSDictionary *)record {
- if(!self.active)return;
- if(self.rows.count>=Limit){self.dropped++;[self stop];return;}
- NSMutableDictionary *r=[record mutableCopy];r[@"seq"]=@(self.rows.count);r[@"nativeReceiveMs"]=@((NSProcessInfo.processInfo.systemUptime-self.startTime)*1000);[self.rows addObject:r];
+    if(!self.active)return;
+    if(self.rows.count>=Limit){self.dropped++;[self stop];return;}
+    NSMutableDictionary *r=[record mutableCopy];r[@"seq"]=@(self.rows.count);
+    r[@"nativeReceiveMs"]=@((NSProcessInfo.processInfo.systemUptime-self.startTime)*1000);
+    r[@"readiness"]=self.state;r[@"sampleEligible"]=@(self.ready);r[@"epoch"]=@(self.epoch);
+    [self.rows addObject:r];
 }
 - (NSDictionary *)nativeEvent:(NSEvent *)e source:(NSString *)source {
- NSNumber *identity=[self.eventIDs objectForKey:e];if(!identity){identity=@(++self.nextEvent);[self.eventIDs setObject:identity forKey:e];}
- NSEventModifierFlags f=e.modifierFlags;
- id responder=self.webview.window.firstResponder;
- NSString *kind=responder==self.webview?@"webview":[responder isKindOfClass:NSTextView.class]?@"text-view":@"other";
- return @{@"source":source,@"eventWindow":e.window==self.webview.window?@"test-window":e.window?@"other-window":@"none",@"eventID":identity,@"eventUptimeMs":@(e.timestamp*1000),@"type":eventType(e),@"nativeKeyCode":@(e.keyCode),@"shift":@((f&NSEventModifierFlagShift)!=0),@"ctrl":@((f&NSEventModifierFlagControl)!=0),@"alt":@((f&NSEventModifierFlagOption)!=0),@"meta":@((f&NSEventModifierFlagCommand)!=0),@"firstResponder":kind,@"keyWindow":@(self.webview.window.isKeyWindow)};
+    NSNumber *identity=[self.eventIDs objectForKey:e];if(!identity){identity=@(++self.nextEvent);[self.eventIDs setObject:identity forKey:e];}
+    NSEventModifierFlags f=e.modifierFlags;id responder=self.webview.window.firstResponder;
+    NSString *kind=responder==self.webview?@"webview":[responder isKindOfClass:NSTextView.class]?@"text-view":@"other";
+    return @{@"source":source,@"eventWindow":e.window==self.webview.window?@"test-window":e.window?@"other-window":@"none",@"eventID":identity,
+        @"eventUptimeMs":@(e.timestamp*1000),@"type":eventType(e),@"nativeKeyCode":@(e.keyCode),
+        @"shift":@((f&NSEventModifierFlagShift)!=0),@"ctrl":@((f&NSEventModifierFlagControl)!=0),@"alt":@((f&NSEventModifierFlagOption)!=0),@"meta":@((f&NSEventModifierFlagCommand)!=0),
+        @"firstResponder":kind,@"keyWindow":@(self.webview.window.isKeyWindow),@"inputSourceFamily":currentSourceFamily()};
 }
-- (void)installHook {
- id context=self.webview.inputContext;
- if(!context){self.capability=@"unavailable-no-input-context";return;}
- Class cls=object_getClass(context);SEL sel=inputSelector();Method m=class_getInstanceMethod(cls,sel);
- if(!supportedMethod(m)){self.capability=@"unavailable-selector-or-ABI";return;}
- IMP original=method_getImplementation(m);
- if(original==(IMP)observeInput){self.capability=@"unavailable-already-wrapped";return;}
- // Add an own method before replacement: never replace an inherited superclass slot.
- class_addMethod(cls,sel,original,method_getTypeEncoding(m));
- Method own=NULL;unsigned int count=0;Method *methods=class_copyMethodList(cls,&count);
- for(unsigned int i=0;i<count;i++)if(method_getName(methods[i])==sel)own=methods[i];free(methods);
- if(!own){self.capability=@"unavailable-own-method-slot";return;}
- @synchronized(OIProbe.class){if(!originals)originals=[NSMutableDictionary dictionary];
- originals[[NSValue valueWithPointer:(__bridge const void *)cls]]=[NSValue valueWithPointer:original];}
- self.trackedContext=context;self.hookedClass=cls;self.original=original;activeProbe=self;
- method_setImplementation(own,(IMP)observeInput);self.capability=@"installed-awaiting-observation";
+- (void)setPhase:(NSString *)state capability:(NSString *)capability {
+    BOOL changed=![state isEqual:self.state] || ![capability isEqual:self.capability];
+    self.state=state;self.capability=capability;
+    if(changed){[self record:@{@"source":@"readiness-transition",@"contextChecks":@(self.contextChecks),@"capability":capability}];[self status];}
+}
+- (void)failReadiness:(NSString *)reason {
+    [self.readinessTimer invalidate];self.readinessTimer=nil;[self detachHook];
+    [self setPhase:@"failed" capability:reason];
+}
+- (BOOL)installHookOnContext:(id)context {
+    Class cls=object_getClass(context);SEL sel=inputSelector();Method m=class_getInstanceMethod(cls,sel);
+    if(!supportedMethod(m)){[self failReadiness:@"unsupported-selector-or-ABI"];return NO;}
+    IMP original=method_getImplementation(m);
+    if(original==(IMP)observeInput){[self failReadiness:@"already-wrapped"];return NO;}
+    class_addMethod(cls,sel,original,method_getTypeEncoding(m));
+    Method own=NULL;unsigned int count=0;Method *methods=class_copyMethodList(cls,&count);
+    for(unsigned int i=0;i<count;i++)if(method_getName(methods[i])==sel)own=methods[i];free(methods);
+    if(!own){[self failReadiness:@"unavailable-own-method-slot"];return NO;}
+    @synchronized(OIProbe.class) {
+        if(!originals)originals=[NSMutableDictionary dictionary];
+        originals[[NSValue valueWithPointer:(__bridge const void *)cls]]=[NSValue valueWithPointer:original];
+    }
+    self.trackedContext=context;self.hookedClass=cls;self.original=original;activeProbe=self;
+    method_setImplementation(own,(IMP)observeInput);self.epoch++;
+    self.installedMs=@((NSProcessInfo.processInfo.systemUptime-self.startTime)*1000);
+    return YES;
+}
+- (void)detachHook {
+    if(self.hookedClass) {
+        Method m=class_getInstanceMethod(self.hookedClass,inputSelector());
+        if(method_getImplementation(m)==(IMP)observeInput)method_setImplementation(m,self.original);
+        else self.capability=@"restore-conflict";
+        self.hookedClass=Nil;
+    }
+    if(activeProbe==self)activeProbe=nil;self.trackedContext=nil;
+}
+- (void)ensureTimer {
+    if(self.readinessTimer || !self.active || [self.state isEqual:@"failed"])return;
+    NSUInteger generation=self.generation;__weak OIProbe *weak=self;
+    self.readinessTimer=[NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer){
+        OIProbe *p=weak;if(!p || !p.active || p.generation!=generation){[timer invalidate];return;}[p advanceReadiness];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.readinessTimer forMode:NSRunLoopCommonModes];
+}
+- (void)requestFocusConfirmation {
+    if(!self.active || self.focusQueryInFlight)return;
+    self.focusQueryInFlight=YES;NSUInteger generation=self.generation, revision=self.focusRevision;__weak OIProbe *weak=self;
+    [self.webview evaluateJavaScript:@"document.activeElement === document.getElementById('sample')" completionHandler:^(id result,NSError *error){
+        OIProbe *p=weak;if(!p.active || p.generation!=generation)return;
+        p.focusQueryInFlight=NO;if(p.focusRevision!=revision)return;
+        if(!error && [result isKindOfClass:NSNumber.class] && [result boolValue]){p.focusConfirmed=YES;[p advanceReadiness];}
+    }];
+}
+- (void)advanceReadiness {
+    if(!self.active || [self.state isEqual:@"failed"])return;
+    double now=NSProcessInfo.processInfo.systemUptime;
+    if(!self.ready && now>=self.deadline){[self failReadiness:self.focusConfirmed?@"timeout-input-context":@"timeout-focus"];return;}
+    if(!self.focusConfirmed){[self requestFocusConfirmation];return;}
+    if(!self.advanced) {
+        if(!self.everReady)self.firstReadyMs=@((now-self.startTime)*1000);self.everReady=YES;
+        [self setPhase:@"ready-baseline" capability:@"disabled"];
+        [self.readinessTimer invalidate];self.readinessTimer=nil;return;
+    }
+    self.contextChecks++;id context=self.webview.inputContext;
+    if(self.hookedClass && (!context || !self.trackedContext || context!=self.trackedContext)) {
+        [self detachHook];if([self.capability isEqual:@"restore-conflict"]){[self failReadiness:@"restore-conflict"];return;}self.epoch++;self.deadline=now+3.0;
+        [self setPhase:@"arming-context" capability:@"context-changed"];
+        return; // Never silently attribute the transition's event to the old ready epoch.
+    }
+    if(self.hookedClass)return;
+    if(!context){[self setPhase:@"arming-context" capability:@"waiting-input-context"];return;}
+    if([self installHookOnContext:context]) {
+        if(!self.everReady)self.firstReadyMs=@((now-self.startTime)*1000);self.everReady=YES;
+        [self setPhase:@"ready-advanced" capability:@"installed"];
+    }
+}
+- (void)focusChanged:(BOOL)focused {
+    if(!self.active || [self.state isEqual:@"failed"] || self.focusConfirmed==focused)return;
+    self.focusRevision++;self.focusConfirmed=focused;
+    if(!focused){[self detachHook];self.epoch++;self.deadline=NSProcessInfo.processInfo.systemUptime+3.0;[self setPhase:@"arming-focus" capability:@"waiting-focus"];}
+    [self ensureTimer];[self advanceReadiness];
 }
 - (void)start:(NSString *)label advanced:(BOOL)advanced {
- [self stop];self.generation++;self.rows=[NSMutableArray array];self.calls=[NSMutableDictionary dictionary];[self.eventIDs removeAllObjects];self.nextEvent=0;self.nextCall=0;self.dropped=0;self.label=label;self.advanced=advanced;self.startTime=NSProcessInfo.processInfo.systemUptime;self.active=YES;self.capability=@"disabled";
- if(advanced)[self installHook];
- __weak OIProbe *weak=self;
- self.monitor=[NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskFlagsChanged|NSEventMaskKeyDown|NSEventMaskKeyUp) handler:^NSEvent *(NSEvent *event){OIProbe *p=weak;if(p.active && p.webview.window && targetWindow(event.window,p.webview.window,NSApp.keyWindow) && shiftEvent(event))[p record:[p nativeEvent:event source:@"app-local-monitor"]];return event;}];
- if(!self.monitor)self.capability=@"local-monitor-unavailable";
- [self record:@{@"source":@"session-start",@"advanced":@(advanced)}];[self status];
+    if(!enumValue(label,@[@"abc",@"builtin-chinese",@"sogou-chinese",@"sogou-english"])) {
+        if(!self.active){self.capability=@"label-required";[self status];}return;
+    }
+    [self stop];self.generation++;self.epoch=0;self.rows=[NSMutableArray array];self.calls=[NSMutableDictionary dictionary];[self.eventIDs removeAllObjects];
+    self.nextEvent=0;self.nextCall=0;self.dropped=0;self.contextChecks=0;self.label=label;self.advanced=advanced;
+    self.focusConfirmed=NO;self.focusQueryInFlight=NO;self.everReady=NO;self.firstReadyMs=nil;self.installedMs=nil;
+    self.sessionID=[NSUUID.UUID.UUIDString.lowercaseString substringToIndex:8];self.sourceAtStart=currentSourceFamily();
+    self.startTime=NSProcessInfo.processInfo.systemUptime;self.deadline=self.startTime+3.0;self.active=YES;
+    self.state=@"arming-focus";self.endState=@"none";self.capability=@"waiting-focus";
+    __weak OIProbe *weak=self;
+    self.monitor=[NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskFlagsChanged|NSEventMaskKeyDown|NSEventMaskKeyUp) handler:^NSEvent *(NSEvent *event){
+        OIProbe *p=weak;
+        if(p.active && targetWindow(event.window,p.webview.window,NSApp.keyWindow) && shiftEvent(event)) {
+            if(p.ready && p.advanced && (!p.trackedContext || p.webview.inputContext!=p.trackedContext))[p advanceReadiness];
+            [p record:[p nativeEvent:event source:@"app-local-monitor"]];
+        }
+        return event;
+    }];
+    [self record:@{@"source":@"session-start",@"advanced":@(advanced),@"inputSourceFamily":self.sourceAtStart}];
+    if(!self.monitor){[self failReadiness:@"local-monitor-unavailable"];return;}
+    [self status];[self ensureTimer];[self requestFocusConfirmation];
 }
 - (void)stop {
- self.active=NO;
- if(self.monitor){[NSEvent removeMonitor:self.monitor];self.monitor=nil;}
- if(self.hookedClass){Method m=class_getInstanceMethod(self.hookedClass,inputSelector());if(method_getImplementation(m)==(IMP)observeInput)method_setImplementation(m,self.original);else self.capability=@"restore-conflict";self.hookedClass=Nil;}
- if(activeProbe==self)activeProbe=nil;self.trackedContext=nil;
- [self status];
+    if(self.active)self.endState=self.state;
+    self.active=NO;self.generation++;[self.readinessTimer invalidate];self.readinessTimer=nil;
+    if(self.monitor){[NSEvent removeMonitor:self.monitor];self.monitor=nil;}
+    [self detachHook];self.state=@"stopped";self.focusQueryInFlight=NO;[self status];
 }
 - (NSUInteger)pending {NSUInteger n=0;for(NSNumber *v in self.calls.allValues)if(v.unsignedIntegerValue==0)n++;return n;}
+- (NSString *)outcome {
+    if(!self.advanced)return @"baseline";
+    NSString *state=self.active?self.state:self.endState;
+    if(self.calls.count)return @"advanced-observed";
+    if([state isEqual:@"ready-advanced"])return @"advanced-ready";
+    return self.everReady?@"advanced-interrupted":@"advanced-not-ready";
+}
+- (NSString *)exportName {return [NSString stringWithFormat:@"native-shift-v4-%@-%@-%@-%@.json",self.host,self.label,[self outcome],self.sessionID];}
 - (NSDictionary *)snapshot {
- NSBundle *wk=[NSBundle bundleForClass:WKWebView.class];
- return @{@"schema":@3,@"diagnostic":@"native-shift-host-comparison-v3",@"commit":@OI_COMMIT,@"htmlSHA256":@OI_HTML_SHA,@"host":self.host,@"bundleID":NSBundle.mainBundle.bundleIdentifier?:@"unknown",@"osVersion":NSProcessInfo.processInfo.operatingSystemVersionString,@"webKitBundleVersion":[wk objectForInfoDictionaryKey:@"CFBundleVersion"]?:@"unknown",@"tauriVersion":[self.host isEqual:@"tauri"]?@"2.12.4":@"not-used",@"wryVersion":[self.host isEqual:@"tauri"]?@"0.57.0":@"not-used",@"inputMethodManualLabel":self.label,@"inputMethodAutomaticallyDetected":@NO,@"advancedRequested":@(self.advanced),@"inputContextProbe":self.capability,@"observations":@{@"nativeShift":@"application-local-monitor",@"wkResponderEntry":@"not-instrumented",@"inputContextCompletion":self.capability,@"inputContextOffMainEntry":@"forwarded-unobserved",@"DOM":@"window-capture"},@"pendingCallbacks":@([self pending]),@"callbackCounts":self.calls,@"limit":@(Limit),@"dropped":@(self.dropped),@"active":@(self.active),@"clockNote":@"nativeReceiveMs is relative native uptime; eventUptimeMs/callbackUptimeMs are absolute monotonic uptime; pageMs is a separate clock. DOM/native correlation is temporal inference, not object identity. Shift flags are aggregate, not per-side release state.",@"rows":self.rows};
+    NSBundle *wk=[NSBundle bundleForClass:WKWebView.class];
+    return @{@"schema":@4,@"diagnostic":@"native-shift-host-comparison-v4",@"commit":@OI_COMMIT,@"htmlSHA256":@OI_HTML_SHA,
+        @"host":self.host,@"bundleID":NSBundle.mainBundle.bundleIdentifier?:@"unknown",@"osVersion":NSProcessInfo.processInfo.operatingSystemVersionString,
+        @"webKitBundleVersion":[wk objectForInfoDictionaryKey:@"CFBundleVersion"]?:@"unknown",@"tauriVersion":[self.host isEqual:@"tauri"]?@"2.12.4":@"not-used",@"wryVersion":[self.host isEqual:@"tauri"]?@"0.57.0":@"not-used",
+        @"inputMethodManualLabel":self.label,@"inputSourceFamilyAtStart":self.sourceAtStart,@"inputSourceDetection":@"public-TIS-family-only",@"inputMethodInternalModeDetected":@NO,
+        @"sessionID":self.sessionID,@"advancedRequested":@(self.advanced),@"inputContextProbe":self.capability,@"readinessState":self.state,@"stateAtStop":self.endState,
+        @"outcome":[self outcome],@"everReady":@(self.everReady),@"installedNow":@(self.hookedClass!=Nil),@"contextChecks":@(self.contextChecks),@"firstReadyMs":self.firstReadyMs?:NSNull.null,@"lastInstalledMs":self.installedMs?:NSNull.null,
+        @"observations":@{@"nativeShift":@"application-local-monitor",@"wkResponderEntry":@"not-instrumented",@"inputContextCompletion":self.capability,@"inputContextOffMainEntry":@"forwarded-unobserved",@"DOM":@"window-capture"},
+        @"pendingCallbacks":@([self pending]),@"callbackCounts":self.calls,@"limit":@(Limit),@"dropped":@(self.dropped),@"active":@(self.active),
+        @"clockNote":@"Native and page monotonic clocks have different origins. DOM/native correlation is temporal inference. Only ready rows are eligible; callback callEpoch identifies its original context interval. Shift flags are aggregate, not per-side release state.",@"rows":self.rows};
 }
 - (void)status {
- if(!self.webview)return;
- NSDictionary *s=@{@"active":@(self.active),@"count":@(self.rows.count),@"dropped":@(self.dropped),@"pending":@([self pending]),@"capability":self.capability,@"host":self.host,@"commit":@OI_COMMIT};
- NSData *data=[NSJSONSerialization dataWithJSONObject:s options:0 error:nil];NSString *json=[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding];
- [self.webview evaluateJavaScript:[NSString stringWithFormat:@"window.nativeStatus?.(%@)",json] completionHandler:nil];
+    if(!self.webview)return;
+    NSDictionary *s=@{@"active":@(self.active),@"ready":@(self.ready),@"state":self.state,@"count":@(self.rows.count),@"dropped":@(self.dropped),@"pending":@([self pending]),@"capability":self.capability,@"host":self.host,@"commit":@OI_COMMIT,@"sourceFamily":self.sourceAtStart};
+    NSData *data=[NSJSONSerialization dataWithJSONObject:s options:0 error:nil];NSString *json=[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding];
+    [self.webview evaluateJavaScript:[NSString stringWithFormat:@"window.nativeStatus?.(%@)",json] completionHandler:nil];
 }
 - (void)export {
- [self stop];NSSavePanel *panel=[NSSavePanel savePanel];panel.nameFieldStringValue=[NSString stringWithFormat:@"native-shift-v3-%@-%@.json",self.host,self.label];
- [panel beginSheetModalForWindow:self.webview.window completionHandler:^(NSModalResponse response){if(response!=NSModalResponseOK)return;NSError *error=nil;NSData *data=[NSJSONSerialization dataWithJSONObject:[self snapshot] options:NSJSONWritingPrettyPrinted error:&error];if(data && [data writeToURL:panel.URL options:NSDataWritingAtomic error:&error])return;NSAlert *alert=[NSAlert new];alert.messageText=@"导出失败，请重新选择保存位置。";[alert beginSheetModalForWindow:self.webview.window completionHandler:nil];}];
+    [self stop];NSSavePanel *panel=[NSSavePanel savePanel];panel.nameFieldStringValue=[self exportName];
+    [panel beginSheetModalForWindow:self.webview.window completionHandler:^(NSModalResponse response){
+        if(response!=NSModalResponseOK)return;NSError *error=nil;NSData *data=[NSJSONSerialization dataWithJSONObject:[self snapshot] options:NSJSONWritingPrettyPrinted error:&error];
+        if(data && [data writeToURL:panel.URL options:NSDataWritingAtomic error:&error])return;
+        NSAlert *alert=[NSAlert new];alert.messageText=@"导出失败，请重新选择保存位置。";[alert beginSheetModalForWindow:self.webview.window completionHandler:nil];
+    }];
 }
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
- if(!message.frameInfo.mainFrame || ![message.body isKindOfClass:NSDictionary.class])return;
- NSDictionary *b=message.body;id op=b[@"op"];
- if([op isEqual:@"status"]){[self status];return;}
- if([op isEqual:@"start"]){if(enumValue(b[@"label"],@[@"abc",@"builtin-chinese",@"sogou-chinese",@"sogou-english"]))[self start:b[@"label"] advanced:[b[@"advanced"] isEqual:@YES]];return;}
- if([op isEqual:@"stop"]){[self stop];return;}
- if([op isEqual:@"export"]){[self export];return;}
- if([op isEqual:@"dom"]){NSDictionary *safe=safeDOM(b);if(safe)[self record:safe];}
- if([op isEqual:@"text-state"] && enumValue(b[@"type"],@[@"beforeinput",@"input",@"compositionstart",@"compositionupdate",@"compositionend"]))[self record:@{@"source":@"dom-text-length",@"type":b[@"type"],@"length":number(b[@"length"]),@"targetLength":number(b[@"targetLength"]),@"pageMs":number(b[@"pageMs"])}];
- [self status];
+    if(!message.frameInfo.mainFrame || ![message.body isKindOfClass:NSDictionary.class])return;
+    NSDictionary *b=message.body;id op=b[@"op"];
+    if([op isEqual:@"status"]){[self status];return;}
+    if([op isEqual:@"start"]){[self start:b[@"label"] advanced:[b[@"advanced"] isEqual:@YES]];return;}
+    if([op isEqual:@"focus"]){if([b[@"focused"] isKindOfClass:NSNumber.class])[self focusChanged:[b[@"focused"] boolValue]];return;}
+    if([op isEqual:@"stop"]){[self stop];return;}
+    if([op isEqual:@"export"]){[self export];return;}
+    if([op isEqual:@"dom"]){NSDictionary *safe=safeDOM(b);if(safe)[self record:safe];}
+    if([op isEqual:@"text-state"] && enumValue(b[@"type"],@[@"beforeinput",@"input",@"compositionstart",@"compositionupdate",@"compositionend"]))
+        [self record:@{@"source":@"dom-text-length",@"type":b[@"type"],@"length":number(b[@"length"]),@"targetLength":number(b[@"targetLength"]),@"pageMs":number(b[@"pageMs"])}];
+    [self status];
 }
-- (void)dealloc {if(_monitor)[NSEvent removeMonitor:_monitor];if(_closeObserver)[NSNotificationCenter.defaultCenter removeObserver:_closeObserver];}
+- (void)dealloc {[_readinessTimer invalidate];if(_monitor)[NSEvent removeMonitor:_monitor];if(_closeObserver)[NSNotificationCenter.defaultCenter removeObserver:_closeObserver];}
 @end
 static OIProbe *tauriProbe;
 void oi_attach(void *webview) {tauriProbe=[[OIProbe alloc]initWithHost:@"tauri"];[tauriProbe attach:(__bridge WKWebView *)webview];}
 
-// Explicit CLI-only CI smoke; never runs during ordinary launch or writes a report.
+// CLI-only cold-start smoke. No warmup baseline, prior typing, export, or fixed
+// delay before first advanced Start. Readiness conditions, not elapsed sleep,
+// determine when a test event is sent.
 static void selfTest(OIProbe *probe) {
- __weak OIProbe *weak=probe;
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3*NSEC_PER_SEC),dispatch_get_main_queue(),^{
- OIProbe *p=weak;
- [p.webview evaluateJavaScript:@"document.getElementById('start').click(); document.activeElement.id" completionHandler:^(id result,NSError *error){
- if(error || ![result isEqual:@"sample"]){fprintf(stderr,"FAIL native smoke page/focus\n");exit(11);}
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
- if(!p.active || p.advanced){fprintf(stderr,"FAIL native smoke default public capture\n");exit(12);}
- NSEvent *event=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:NSEventModifierFlagShift timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:p.webview.window.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:56];
- [NSApp postEvent:event atStart:NO];
- NSEvent *windowless=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:56];
- BOOL releaseEligible=targetWindow(windowless.window,p.webview.window,NSApp.keyWindow);
- [NSApp postEvent:windowless atStart:NO];
- [p.webview evaluateJavaScript:@"document.getElementById('sample').dispatchEvent(new KeyboardEvent('keydown',{key:'Shift',code:'ShiftLeft',keyCode:16,bubbles:true}));document.getElementById('sample').dispatchEvent(new KeyboardEvent('keydown',{key:'SECRET_SENTINEL',code:'KeyA',keyCode:65,bubbles:true}));" completionHandler:nil];
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
- BOOL native=NO,dom=NO,windowless=NO;for(NSDictionary *row in p.rows){native|=[row[@"source"] isEqual:@"app-local-monitor"];dom|=[row[@"source"] isEqual:@"dom-window-capture"];windowless|=[row[@"source"] isEqual:@"app-local-monitor"] && [row[@"shift"] isEqual:@NO];}
- printf("Synthetic release routing: eligibleBeforeDispatch=%d captured=%d (AppKit may associate a window before monitoring)\n",releaseEligible,windowless);
- if(!native || !dom || (releaseEligible && !windowless)){fprintf(stderr,"FAIL native smoke flagsChanged/DOM coverage: native=%d dom=%d release=%d eligible=%d\n",native,dom,windowless,releaseEligible);exit(13);}
- [p export];
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
- NSWindow *sheet=p.webview.window.attachedSheet;if(!sheet){fprintf(stderr,"FAIL native smoke export sheet\n");exit(14);}
- [NSApp endSheet:sheet returnCode:NSModalResponseCancel];
- if(p.active || p.monitor){fprintf(stderr,"FAIL native smoke export did not stop\n");exit(15);}
- NSString *text=[[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:[p snapshot] options:0 error:nil] encoding:NSUTF8StringEncoding];
- if([text containsString:@"SECRET_SENTINEL"]){fprintf(stderr,"FAIL native smoke privacy\n");exit(16);}
- [p start:@"abc" advanced:YES];
- NSEvent *advancedEvent=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:NSEventModifierFlagShift timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:p.webview.window.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:56];
- [NSApp postEvent:advancedEvent atStart:NO];
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
- printf("Real system private probe availability: %s; observed calls=%lu; pending=%lu (synthetic Shift, not Sogou)\n",p.capability.UTF8String,(unsigned long)p.calls.count,(unsigned long)[p pending]);
- [p stop];if(p.hookedClass || p.monitor){fprintf(stderr,"FAIL real private probe teardown\n");exit(19);}
- [p start:@"abc" advanced:NO];p.selfTestAwaitingClose=YES;[p.webview.window performClose:nil];
- });
- // Tao queues CloseRequested and returns NO from windowShouldClose. The close
- // observer asserts cleanup when the actual notification arrives, within timeout.
- });});});}];});
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_SEC),dispatch_get_main_queue(),^{fprintf(stderr,"FAIL native smoke timeout\n");exit(18);});
+    __weak OIProbe *weak=probe;__block NSUInteger step=0;__block BOOL busy=NO;
+    double deadline=NSProcessInfo.processInfo.systemUptime+25;
+    NSTimer *timer=[NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer){
+        OIProbe *p=weak;
+        if(!p || NSProcessInfo.processInfo.systemUptime>deadline){fprintf(stderr,"FAIL v4 cold-start smoke timeout at stage %lu\n",(unsigned long)step);exit(20);}
+        if(busy)return;
+        if(step==0) {
+            busy=YES;
+            [p.webview evaluateJavaScript:@"!!document.getElementById('start')" completionHandler:^(id result,NSError *error){
+                if(!error && [result boolValue]) {
+                    step=1;
+                    [p.webview evaluateJavaScript:@"window.confirm=()=>true;document.getElementById('ime').value='abc';document.getElementById('ime').dispatchEvent(new Event('change'));document.getElementById('privateProbe').checked=true;document.getElementById('start').click()" completionHandler:nil];
+                }
+                busy=NO;
+            }];return;
+        }
+        if([p.state isEqual:@"failed"]){fprintf(stderr,"FAIL v4 cold-start readiness: %s\n",p.capability.UTF8String);exit(21);}
+        if(step==1 && p.ready) {
+            if(!p.advanced || !p.hookedClass || !p.installedMs || !p.focusConfirmed){fprintf(stderr,"FAIL false advanced readiness\n");exit(22);}
+            printf("Cold first Start ready: checks=%lu readyMs=%.3f OS=%s WebKit=%s\n",(unsigned long)p.contextChecks,p.firstReadyMs.doubleValue,NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String,[[NSBundle bundleForClass:WKWebView.class] objectForInfoDictionaryKey:@"CFBundleVersion"]?[[[NSBundle bundleForClass:WKWebView.class] objectForInfoDictionaryKey:@"CFBundleVersion"] UTF8String]:"unknown");
+            NSEvent *event=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:NSEventModifierFlagShift timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:p.webview.window.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:56];
+            [NSApp postEvent:event atStart:NO];
+            [p.webview evaluateJavaScript:@"document.getElementById('sample').dispatchEvent(new KeyboardEvent('keydown',{key:'Shift',code:'ShiftLeft',keyCode:16,bubbles:true}));document.getElementById('sample').dispatchEvent(new KeyboardEvent('keydown',{key:'SECRET_SENTINEL',code:'KeyA',keyCode:65,bubbles:true}));" completionHandler:nil];step=2;return;
+        }
+        if(step==2) {
+            BOOL native=NO,dom=NO;for(NSDictionary *row in p.rows){native|=[row[@"source"] isEqual:@"app-local-monitor"];dom|=[row[@"source"] isEqual:@"dom-window-capture"] && [row[@"sampleEligible"] boolValue];}
+            if(!native || !dom || !p.calls.count || [p pending])return;
+            NSString *json=[[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:[p snapshot] options:0 error:nil] encoding:NSUTF8StringEncoding];
+            if([json containsString:@"SECRET_SENTINEL"]){fprintf(stderr,"FAIL smoke privacy\n");exit(23);}
+            printf("PASS real cold-start input-context call and completion; calls=%lu (synthetic, not Sogou)\n",(unsigned long)p.calls.count);
+            [p.webview evaluateJavaScript:@"document.getElementById('stop').click()" completionHandler:nil];step=3;return;
+        }
+        if(step==3 && !p.active) {
+            if(p.hookedClass || p.readinessTimer || p.monitor){fprintf(stderr,"FAIL smoke stop cleanup\n");exit(24);}
+            [p.webview evaluateJavaScript:@"document.getElementById('privateProbe').checked=false;document.getElementById('start').click()" completionHandler:nil];step=4;return;
+        }
+        if(step==4 && p.ready) {
+            if(p.advanced || p.hookedClass || p.calls.count){fprintf(stderr,"FAIL smoke baseline isolation\n");exit(25);}
+            [p export];step=5;return;
+        }
+        if(step==5 && p.webview.window.attachedSheet) {
+            [NSApp endSheet:p.webview.window.attachedSheet returnCode:NSModalResponseCancel];step=6;return;
+        }
+        if(step==6 && !p.webview.window.attachedSheet) {
+            if(p.active || p.monitor || p.readinessTimer){fprintf(stderr,"FAIL canceled export cleanup\n");exit(26);}
+            [p.webview evaluateJavaScript:@"document.getElementById('start').click()" completionHandler:nil];step=7;return;
+        }
+        if(step==7 && p.ready) {
+            p.selfTestAwaitingClose=YES;step=8;[p.webview.window performClose:nil];
+        }
+    }];
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }

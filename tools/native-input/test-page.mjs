@@ -31,12 +31,18 @@ try {
   assert.equal(await page.locator("#privateProbe").isChecked(), false);
   await page.locator("#sample").press("ShiftLeft");
   assert.equal(await page.evaluate(() => messages.filter((x) => x.op === "dom").length), 0);
+  assert.equal(await page.locator("#ime").inputValue(), "");
+  assert.equal(await page.locator("#start").isDisabled(), true);
+  await page.locator("#ime").selectOption("sogou-chinese");
   await page.locator("#start").click();
   assert.equal(await page.locator("#sample").evaluate((e) => document.activeElement === e), true);
   await page.evaluate(() =>
     nativeStatus({
       host: "appkit",
       commit: "test",
+      state: "arming-context",
+      ready: false,
+      sourceFamily: "sogou",
       active: true,
       count: 1,
       dropped: 0,
@@ -44,6 +50,23 @@ try {
       capability: "disabled",
     }),
   );
+  assert.match(await page.locator("#state").textContent(), /准备中/);
+  assert(!/已就绪/.test(await page.locator("#state").textContent()));
+  await page.evaluate(() =>
+    nativeStatus({
+      host: "appkit",
+      commit: "test",
+      active: true,
+      ready: true,
+      state: "ready-advanced",
+      count: 2,
+      dropped: 0,
+      pending: 0,
+      capability: "installed",
+      sourceFamily: "sogou",
+    }),
+  );
+  assert.match(await page.locator("#state").textContent(), /已就绪，可以按 Shift/);
   await page.keyboard.press("ShiftLeft");
   await page.keyboard.press("ShiftRight");
   await page.keyboard.type("SECRET_SENTINEL_abcdef123456");
@@ -74,6 +97,24 @@ try {
   assert.equal(await page.evaluate(() => messages.filter((x) => x.op === "start").length), 2);
   await page.locator("#export").click();
   assert.equal(await page.evaluate(() => messages.at(-1).op), "export");
+  await page.evaluate(() =>
+    nativeStatus({
+      host: "appkit",
+      commit: "test",
+      active: true,
+      ready: false,
+      state: "failed",
+      count: 2,
+      dropped: 0,
+      pending: 0,
+      capability: "timeout-input-context",
+      sourceFamily: "builtin-chinese",
+    }),
+  );
+  assert.match(await page.locator("#state").textContent(), /准备失败/);
+  assert.equal(await page.locator("#export").isDisabled(), false);
+  assert.match(await page.locator("#sourceFamily").textContent(), /不一致/);
+  assert.equal(await page.locator("#ime").inputValue(), "sogou-chinese");
   console.log(
     "PASS page default-off, private opt-in, focus, both Shifts, printable redaction, length-only text, discard confirmation, export action",
   );
