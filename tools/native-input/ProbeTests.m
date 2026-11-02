@@ -28,6 +28,11 @@ int main(void){@autoreleasepool{
  [NSApplication sharedApplication];
  check(supportedMethod(class_getInstanceMethod(FakeContext.class,inputSelector())),"exact void/block ABI");
  check(!supportedMethod(class_getInstanceMethod(NSObject.class,@selector(description))),"unsupported selector ABI rejected");
+ NSWindow *one=(id)[NSObject new], *two=(id)[NSObject new];
+ check(targetWindow(one,one,two),"window scope: own event accepted");
+ check(!targetWindow(two,one,one),"window scope: other window excluded");
+ check(targetWindow(nil,one,one),"window scope: windowless modifier accepted for active test window");
+ check(!targetWindow(nil,one,two) && !targetWindow(nil,one,nil) && !targetWindow(nil,nil,nil),"window scope: inactive or disposed test window excluded");
  NSString *secret=@"SECRET_SENTINEL_abcdefghijklmnopqrstuvwxyz_938475";
  NSDictionary *safe=safeDOM(@{@"type":@"keydown",@"code":@"ShiftLeft",@"keyCode":@65,@"prototypeCode":@66,@"key":secret,@"which":@67,@"text":secret,@"length":secret,@"pageMs":secret});
  NSString *serialized=[[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:safe options:0 error:nil] encoding:NSUTF8StringEncoding];
