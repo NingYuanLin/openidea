@@ -39,6 +39,8 @@ typedef void (*InputIMP)(id, SEL, NSEvent *, void (^)(BOOL));
 @property NSUInteger nativeCode, step, calls, callbacks, pending, insertCalls;
 @property double started, deadline;
 @property(nonatomic, strong) NSEvent *expectedEvent;
+@property(nonatomic, strong) NSEvent *deliveredEvent;
+@property(nonatomic, strong) id monitor;
 @property(nonatomic, strong) NSString *outputPath;
 - (void)record:(NSDictionary *)row;
 - (void)finish:(NSString *)status reason:(NSString *)reason;
@@ -47,7 +49,11 @@ typedef void (*InputIMP)(id, SEL, NSEvent *, void (^)(BOOL));
 
 static void controlledInput(id receiver, SEL cmd, NSEvent *event, void (^completion)(BOOL)) {
     Experiment *p = current;
-    if (p && !p.finished && receiver == p.context && event == p.expectedEvent) {
+    if (p && !p.finished && event.type == NSEventTypeFlagsChanged && (event.keyCode == 56 || event.keyCode == 60)) {
+        [p record:@{@"source": @"context-dispatch-check", @"sameContext": @(receiver == p.context),
+            @"samePostedObject": @(event == p.expectedEvent), @"sameDeliveredObject": @(event == p.deliveredEvent)}];
+    }
+    if (p && !p.finished && receiver == p.context && event == p.deliveredEvent) {
         [p receiveContext:receiver event:event completion:completion];
         return;
     }
@@ -122,6 +128,16 @@ static void controlledInput(id receiver, SEL cmd, NSEvent *event, void (^complet
     if (!own) { [self finish:@"unsupported" reason:@"own-method-slot-missing"]; return NO; }
     self.context = ctx; contextClass = cls; current = self;
     method_setImplementation(own, (IMP)controlledInput); self.installed = YES;
+    __weak Experiment *weak = self;
+    self.monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged handler:^NSEvent *(NSEvent *event) {
+        Experiment *p = weak;
+        if (p && p.busy && event.window == p.window && event.keyCode == p.nativeCode) {
+            BOOL timestampMatches = fabs(event.timestamp - p.expectedEvent.timestamp) < 0.001;
+            [p record:@{@"source": @"native-delivered", @"samePostedObject": @(event == p.expectedEvent), @"timestampMatches": @(timestampMatches)}];
+            if (timestampMatches) p.deliveredEvent = event;
+        }
+        return event;
+    }];
     [self record:@{@"source": @"installed", @"contextClass": NSStringFromClass(cls), @"featureReadback": @(self.featureReadback)}];
     return YES;
 }
@@ -173,11 +189,12 @@ static void controlledInput(id receiver, SEL cmd, NSEvent *event, void (^complet
     if (!self.busy || ![b[@"type"] isEqual:self.currentDown ? @"keydown" : @"keyup"] || self.pending || self.callbacks != self.step + 1) {
         [self finish:@"error" reason:@"unexpected-DOM-order-or-pending-callback"]; return;
     }
-    self.step++; self.busy = NO; self.expectedEvent = nil;
+    self.step++; self.busy = NO; self.expectedEvent = nil; self.deliveredEvent = nil;
 }
 - (void)finish:(NSString *)status reason:(NSString *)reason {
     if (self.finished) return;
     self.finished = YES; [self.timer invalidate];
+    if (self.monitor) [NSEvent removeMonitor:self.monitor]; self.monitor = nil;
     if (self.installed) {
         Method method = class_getInstanceMethod(contextClass, inputSelector());
         if (method_getImplementation(method) == (IMP)controlledInput) method_setImplementation(method, originalIMP);
