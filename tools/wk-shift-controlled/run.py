@@ -50,6 +50,9 @@ def main():
             process = subprocess.run(command, capture_output=True, text=True, timeout=25)
             (directory / f'{name}.txt').write_text(process.stdout + process.stderr)
             result = json.loads(path.read_text()) if path.exists() else {'status': 'error', 'reason': 'no-result-file'}
+            # Synthetic-only evidence is also visible through Actions' text log API.
+            # This avoids making analysis depend on downloading a ZIP artifact.
+            print('CASE_DETAIL ' + json.dumps({'case': name, 'result': result}), flush=True)
             analysis = validate(result)
             if process.returncode != 0 and analysis['valid']:
                 analysis = {'valid': False, 'status': 'error', 'reason': 'process-exit-conflict'}
