@@ -1,0 +1,36 @@
+name: Controlled WKWebView Shift experiment
+on:
+  push:
+    branches: [diagnostic/wk-shift-controlled-20261103]
+    paths: ["tools/wk-shift-controlled/**", ".github/workflows/wk-shift-controlled.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  experiment:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify standard ARM public fork environment
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          test "$GITHUB_REPOSITORY" = NingYuanLin/openidea
+          test "$REPOSITORY_PRIVATE" = false
+          test "$(uname -m)" = arm64
+          sw_vers
+          xcodebuild -version
+      - name: Validate result accounting
+        run: python3 tools/wk-shift-controlled/test_validation.py
+      - name: Compile, sign and run isolated native matrix
+        run: bash tools/wk-shift-controlled/build.sh
+      - name: Verify source unchanged
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controlled-wk-shift-synthetic-results
+          path: tools/wk-shift-controlled/out/results/
+          if-no-files-found: warn
+          retention-days: 14
