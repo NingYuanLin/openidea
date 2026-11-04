@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   dmg:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -20,13 +20,13 @@ jobs:
       CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Verify public fork and ARM runner
+      - name: Verify public fork and standard Intel runner
         env:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
           test "$GITHUB_REPOSITORY" = NingYuanLin/openidea
           test "$REPOSITORY_PRIVATE" = false
-          test "$(uname -m)" = arm64
+          test "$(uname -m)" = x86_64
           uname -m
           sysctl -n hw.ncpu hw.memsize machdep.cpu.brand_string
       - uses: pnpm/action-setup@v4
@@ -37,7 +37,7 @@ jobs:
         with: { targets: aarch64-apple-darwin }
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-aarch64-apple-darwin
+          key: test-intel-host-aarch64-apple-darwin
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - name: Validate terminal regression and types
