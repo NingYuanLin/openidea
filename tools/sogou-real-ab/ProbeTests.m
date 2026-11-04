@@ -35,6 +35,9 @@ static int textOriginalCalls;
 static id receivedText;
 static NSRange receivedRange;
 static void (^pendingTextRange)(NSRange);
+static BOOL fakeBool(id o,SEL c){textOriginalCalls++;return YES;}
+static NSRange fakeRange(id o,SEL c){textOriginalCalls++;return NSMakeRange(9,2);}
+static void fakeBoolAsync(id o,SEL c,void(^callback)(BOOL)){textOriginalCalls++;callback(YES);}
 static void fakeInsert(id o,SEL c,id text,NSRange range){textOriginalCalls++;receivedText=text;receivedRange=range;}
 static void fakeRangeAsync(id o,SEL c,void(^callback)(NSRange)){textOriginalCalls++;pendingTextRange=callback;}
 int main(void){@autoreleasepool{
@@ -120,6 +123,10 @@ int main(void){@autoreleasepool{
  NSDictionary *entry=p.rows[p.rows.count-2];check([entry[@"textLength"] unsignedIntegerValue]==secret.length&&[entry[@"replacementRange"][@"notFound"] boolValue],"native insert logs length and notfound only");
  insertRange(view,insertSel,@"",NSMakeRange(3,0));entry=p.rows[p.rows.count-2];check([entry[@"textLength"] unsignedIntegerValue]==0&&!entry[@"replacementRange"][@"location"],"empty insert retained; absolute range position omitted");
  insertRange(view,insertSel,[[NSAttributedString alloc]initWithString:secret],NSMakeRange(0,2));
+ SEL boolSel=NSSelectorFromString(@"hasMarkedText"),rangeSel=NSSelectorFromString(@"markedRange"),boolAsyncSel=NSSelectorFromString(@"hasMarkedTextWithCompletionHandler:");
+ implementations[NSStringFromSelector(boolSel)]=[NSValue valueWithPointer:(IMP)fakeBool];implementations[NSStringFromSelector(rangeSel)]=[NSValue valueWithPointer:(IMP)fakeRange];implementations[NSStringFromSelector(boolAsyncSel)]=[NSValue valueWithPointer:(IMP)fakeBoolAsync];
+ check(boolState(view,boolSel)&&rangeState(view,rangeSel).location==9,"sync bool/range results forwarded unchanged");
+ __block BOOL originalBool=NO;boolAsync(view,boolAsyncSel,^(BOOL value){originalBool=value;});check(originalBool&&[p pendingText]==0,"synchronous completion of async BOOL API forwarded once");
  SEL asyncSel=NSSelectorFromString(@"selectedRangeWithCompletionHandler:");implementations[NSStringFromSelector(asyncSel)]=[NSValue valueWithPointer:(IMP)fakeRangeAsync];
  __block int textForwarded=0;rangeAsync(view,asyncSel,^(NSRange range){check(range.location==7,"range callback original value preserved");textForwarded++;});
  check([p pendingText]==1&&textForwarded==0,"text callback absent remains pending");

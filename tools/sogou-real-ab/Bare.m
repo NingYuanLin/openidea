@@ -15,7 +15,12 @@
 @end
 @implementation AppDelegate
 - (void)loadMode:(NSString *)mode {
-    [self.probe dispose];self.probe=nil;
+    OIProbe *previous=self.probe;[previous dispose];
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--diagnostic-self-test"] && previous){
+        if(!previous.disposed){fprintf(stderr,"FAIL old probe cleanup incomplete\n");exit(29);}
+        printf("PASS same-process mode switch disposed old observer; new WKWebView below\n");
+    }
+    self.probe=nil;
     WKWebViewConfiguration *config=[WKWebViewConfiguration new];config.websiteDataStore=WKWebsiteDataStore.nonPersistentDataStore;
     NSMutableDictionary *feature=[@{@"name":@"InputMethodUsesCorrectKeyEventOrder",@"requested":mode,@"actual":NSNull.null,@"status":@"unsupported",@"defaultActual":NSNull.null} mutableCopy];
     id selected=nil;

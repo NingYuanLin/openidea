@@ -1,6 +1,7 @@
 // CLI-only native smoke: actual NSApplication -> WKWebView -> actual input context.
 // Never substitutes input method results, never fabricates DOM keyboard events.
 static void selfTest(OIProbe *probe) {
+    static NSUInteger smokeRuns=0;NSUInteger run=++smokeRuns;
     __weak OIProbe *weak=probe;__block NSUInteger step=0,eventIndex=0;__block BOOL busy=NO;
     double deadline=NSProcessInfo.processInfo.systemUptime+25;
     NSTimer *timer=[NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer){
@@ -44,6 +45,13 @@ static void selfTest(OIProbe *probe) {
             if(p.active || p.monitor || p.readinessTimer){fprintf(stderr,"FAIL export cancel\n");exit(27);}
             [p.webview evaluateJavaScript:@"document.getElementById('start').click()" completionHandler:nil];step=7;return;
         }
-        if(step==7 && p.ready){p.selfTestAwaitingClose=YES;step=8;[p.webview.window performClose:nil];}
+        if(step==7 && p.ready){
+            step=8;
+            if(run==1 && p.changeMode){
+                [timer invalidate];NSString *next=[p.featureInfo[@"requested"] isEqual:@"on"]?@"off":@"on";
+                p.changeMode(next);return;
+            }
+            p.selfTestAwaitingClose=YES;[p.webview.window performClose:nil];
+        }
     }];[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }

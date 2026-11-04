@@ -106,7 +106,8 @@
       const $ = (id) => document.getElementById(id);
       let active = false,
         dirty = false,
-        order = 0;
+        order = 0,
+        modeInitialized = false;
       const send = (body) => window.webkit?.messageHandlers?.nativeDiagnostic?.postMessage(body);
       const updateStart = () => {
         $("start").disabled = active || !$("ime").value;
@@ -124,6 +125,10 @@
       };
       window.nativeStatus = (s) => {
         active = s.active;
+        if (!modeInitialized && s.feature?.requested) {
+          $("mode").value = s.feature.requested;
+          modeInitialized = true;
+        }
         $("feature").textContent =
           "InputMethodUsesCorrectKeyEventOrder：请求=" +
           (s.feature?.requested ?? "未知") +

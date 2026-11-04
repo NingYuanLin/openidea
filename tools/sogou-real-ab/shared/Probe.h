@@ -6,6 +6,7 @@
 - (void)attach:(WKWebView *)webview;
 - (void)stop;
 - (void)dispose;
+- (BOOL)disposed;
 @property(nonatomic,copy) NSDictionary *featureInfo;
 @property(nonatomic,copy) NSDictionary *textCapabilities;
 @property(nonatomic,copy) void (^changeMode)(NSString *mode);

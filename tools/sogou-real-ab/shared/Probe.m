@@ -139,6 +139,7 @@ static BOOL supportedMethod(Method m) {
     self.textCalls[@(call).stringValue]=@([self.textCalls[@(call).stringValue] unsignedIntegerValue]+1);
     NSMutableDictionary *r=[metadata mutableCopy];r[@"source"]=@"text-client-return";r[@"textCall"]=@(call);[self record:r];
 }
+- (BOOL)disposed {return !self.active && !self.monitor && !self.readinessTimer && !self.hookedClass && !self.closeObserver && !self.changeMode;}
 - (void)dispose {
     [self stop];[self.webview.configuration.userContentController removeScriptMessageHandlerForName:@"nativeDiagnostic"];
     if(self.closeObserver)[NSNotificationCenter.defaultCenter removeObserver:self.closeObserver];self.closeObserver=nil;self.changeMode=nil;
