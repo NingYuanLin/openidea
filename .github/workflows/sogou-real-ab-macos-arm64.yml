@@ -1,0 +1,52 @@
+name: Sogou Real A B v5 ARM64
+on:
+  push:
+    branches: [diagnostic/sogou-real-ab-20261104]
+    paths: ["tools/sogou-real-ab/**", ".github/workflows/sogou-real-ab-macos-arm64.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sogou-real-ab-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public fork and ARM runner
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          test "$GITHUB_REPOSITORY" = NingYuanLin/openidea
+          test "$REPOSITORY_PRIVATE" = false
+          test "$(uname -m)" = arm64
+          sw_vers
+          xcodebuild -version
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - run: pnpm install --frozen-lockfile
+      - name: Page privacy and interaction tests
+        run: |
+          pnpm exec playwright install chromium
+          node tools/sogou-real-ab/test-page.mjs
+      - name: Native tests, real WK smoke, build and verify DMG
+        run: bash tools/sogou-real-ab/build-macos.sh
+      - run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sogou-Real-AB-v5-macOS-ARM64
+          path: |
+            tools/sogou-real-ab/out/*.dmg
+            tools/sogou-real-ab/out/*.txt
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: sogou-real-ab-v5-failure-logs
+          path: tools/sogou-real-ab/out/*.txt
+          if-no-files-found: ignore
