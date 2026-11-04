@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenIDEA Shift TEST",
+  "identifier": "ai.l0ng.openidea.shift-test",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "shortDescription": "Test build: narrow Shift 229 terminal scroll workaround",
+    "macOS": { "signingIdentity": "-" }
+  },
+  "plugins": { "updater": { "endpoints": [] } }
+}

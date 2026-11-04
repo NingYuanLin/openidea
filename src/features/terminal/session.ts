@@ -3,6 +3,7 @@
  * lives in a detached host element owned by the session (not by React), so a
  * session survives its tool window being hidden or its pane being re-mounted.
  */
+import { ShiftScrollGuard } from "./shiftScroll";
 import { Terminal, type IDisposable, type ILink, type ILinkHandler } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
@@ -171,6 +172,7 @@ export class TerminalSession {
   readonly key: string;
   readonly host: HTMLDivElement;
   readonly term: Terminal;
+  private readonly shiftScroll: ShiftScrollGuard;
   private readonly fit = new FitAddon();
   private readonly searchAddon = new SearchAddon({ highlightLimit: 2000 });
   private searchDecorations: ISearchOptions["decorations"] | null = null;
@@ -237,6 +239,11 @@ export class TerminalSession {
       overviewRuler: { width: 10 },
       theme: readTerminalTheme(),
       linkHandler: LINK_HANDLER,
+    });
+    this.shiftScroll = new ShiftScrollGuard(this.term);
+    this.term.attachCustomKeyEventHandler((event) => {
+      this.shiftScroll.beforeKey(event);
+      return true;
     });
     this.term.loadAddon(this.fit);
     this.term.loadAddon(this.searchAddon);
@@ -322,6 +329,7 @@ export class TerminalSession {
   }
   /** Applies Settings › Tools › Terminal changes to a live session. */
   applySettings(t: TerminalSettingsValid) {
+    this.shiftScroll.beforeOptionsChange();
     const font = fontFor(t);
     const o = this.term.options;
     if (o.fontFamily !== font.family) {
@@ -619,6 +627,7 @@ export class TerminalSession {
   }
 
   applyTheme() {
+    this.shiftScroll.beforeOptionsChange();
     this.term.options.theme = readTerminalTheme();
     this.searchDecorations = null;
   }
@@ -668,6 +677,7 @@ export class TerminalSession {
     if (this.ptyId !== null) void commands.termKill(this.ptyId);
     this.ptyId = null;
     this.disposables.forEach((d) => d.dispose());
+    this.shiftScroll.dispose();
     this.term.dispose();
     this.host.remove();
   }

@@ -4,6 +4,7 @@
  * and size go to the owner instead of a terminal PTY (a Run console emulating
  * a terminal feeds its process).
  */
+import { ShiftScrollGuard } from "./shiftScroll";
 import { installTerminalDrop } from "./drop";
 import { installTerminalPaste } from "./paste";
 import { Terminal, type IDisposable } from "@xterm/xterm";
@@ -19,12 +20,15 @@ import { findTerminalLinks } from "./links";
 import { LINK_HANDLER, fontFor, openExternal, openFileLink } from "./session";
 import { MIN_CONTRAST_RATIO, readTerminalTheme, remeasureWhenFontsLoad } from "./theme";
 
-const live = new Set<Terminal>();
+const live = new Map<Terminal, ShiftScrollGuard>();
 
 /** Follows a theme change (called with the terminal sessions' own update). */
 export function applyThemeToEmbedded() {
   const theme = readTerminalTheme();
-  for (const t of live) t.options.theme = theme;
+  for (const [t, guard] of live) {
+    guard.beforeOptionsChange();
+    t.options.theme = theme;
+  }
 }
 
 export function createEmbeddedTerminal(host: HTMLElement, opts: EmbeddedTerminalOptions): EmbeddedTerminal {
@@ -51,7 +55,9 @@ export function createEmbeddedTerminal(host: HTMLElement, opts: EmbeddedTerminal
     convertEol: false,
     theme: readTerminalTheme(),
   });
+  const shiftScroll = new ShiftScrollGuard(term);
   term.attachCustomKeyEventHandler((e) => {
+    shiftScroll.beforeKey(e);
     if (isImeKey(e) || terminalKeyAction(e, term.hasSelection()).kind !== "copy") return true;
     if (e.type === "keydown") void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined);
     e.preventDefault();
@@ -59,7 +65,7 @@ export function createEmbeddedTerminal(host: HTMLElement, opts: EmbeddedTerminal
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  live.add(term);
+  live.set(term, shiftScroll);
   const processResize = settledResize((cols, rows) => opts.onResize(cols, rows));
   const disposables: IDisposable[] = [
     term.onData((d) => opts.onData(d)),
@@ -117,6 +123,7 @@ export function createEmbeddedTerminal(host: HTMLElement, opts: EmbeddedTerminal
       removeDrop();
       for (const d of disposables) d.dispose();
       live.delete(term);
+      shiftScroll.dispose();
       term.dispose();
     },
   };

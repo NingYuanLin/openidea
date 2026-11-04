@@ -7,13 +7,14 @@ import { usePlatform } from "@/platform/platformInfo";
 
 const terminal = vi.hoisted(() => ({
   selection: "selected run output",
+  options: { scrollOnUserInput: true },
   handler: (_e: KeyboardEvent): boolean => true,
 }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
-    options = {};
+    options = terminal.options;
     hasSelection() {
       return !!terminal.selection;
     }
@@ -100,4 +101,19 @@ it("copies embedded Run terminal selections before xterm can send Ctrl+C", () =>
     disposeAction();
     term.dispose();
   }
+});
+
+it("guards embedded Shift 229 before the IME early return and restores on disposal", async () => {
+  terminal.options.scrollOnUserInput = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const embedded = createEmbeddedTerminal(host, { onData: vi.fn(), onResize: vi.fn() });
+  const event = new KeyboardEvent("keydown", { code: "ShiftLeft", keyCode: 229, key: "Process" });
+  expect(terminal.handler(event)).toBe(true);
+  expect(terminal.options.scrollOnUserInput).toBe(false);
+  expect(event.defaultPrevented).toBe(false);
+  embedded.dispose();
+  expect(terminal.options.scrollOnUserInput).toBe(true);
+  await Promise.resolve();
+  expect(terminal.options.scrollOnUserInput).toBe(true);
 });
