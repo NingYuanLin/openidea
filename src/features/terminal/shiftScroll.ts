@@ -3,7 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 type ScrollTerminal = Pick<Terminal, "options">;
 
 /**
- * xterm 6 treats CompositionHelper's false return as input even for a Shift-only
+ * xterm 6 treats CompositionHelper's false return as input even for a Shift/Command-only
  * IME key (229). Keep its IME handling intact, suppressing only synchronous
  * scroll-on-input until the current key handler has finished.
  *
@@ -18,7 +18,11 @@ export class ShiftScrollGuard {
 
   beforeKey(event: Pick<KeyboardEvent, "type" | "keyCode" | "code">): void {
     if (this.disposed) return;
-    if (event.type !== "keydown" || event.keyCode !== 229 || !["ShiftLeft", "ShiftRight"].includes(event.code)) {
+    if (
+      event.type !== "keydown" ||
+      event.keyCode !== 229 ||
+      !["ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"].includes(event.code)
+    ) {
       // Also preserve normal input from synchronously dispatched/reentrant keys.
       this.restore();
       return;

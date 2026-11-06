@@ -4,7 +4,7 @@
   "identifier": "ai.l0ng.openidea.shift-test",
   "bundle": {
     "createUpdaterArtifacts": false,
-    "shortDescription": "Test build: narrow Shift 229 terminal scroll workaround",
+    "shortDescription": "Test build: narrow Shift/Command 229 terminal scroll workaround",
     "macOS": { "signingIdentity": "-" }
   },
   "plugins": { "updater": { "endpoints": [] } }

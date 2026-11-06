@@ -7,7 +7,7 @@ const setup = (value = true) => {
   return { term, guard: new ShiftScrollGuard(term) };
 };
 
-it.each(["ShiftLeft", "ShiftRight"])(
+it.each(["ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"])(
   "suppresses only the synchronous %s 229 interval without changing the event",
   async (code) => {
     const { term, guard } = setup();
@@ -23,6 +23,11 @@ it.each(["ShiftLeft", "ShiftRight"])(
 
 it.each([
   new KeyboardEvent("keydown", { code: "ShiftLeft", keyCode: 16 }),
+  new KeyboardEvent("keydown", { code: "MetaLeft", keyCode: 91, metaKey: true }),
+  new KeyboardEvent("keydown", { code: "MetaRight", keyCode: 93, metaKey: true }),
+  new KeyboardEvent("keyup", { code: "MetaLeft", keyCode: 229 }),
+  new KeyboardEvent("keyup", { code: "MetaRight", keyCode: 93 }),
+  new KeyboardEvent("keydown", { code: "KeyA", keyCode: 229, metaKey: true }),
   new KeyboardEvent("keyup", { code: "ShiftLeft", keyCode: 229 }),
   new KeyboardEvent("keydown", { code: "KeyA", keyCode: 229 }),
   new KeyboardEvent("keydown", { code: "Unidentified", keyCode: 229 }),

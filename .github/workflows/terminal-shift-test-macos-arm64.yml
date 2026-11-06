@@ -62,6 +62,7 @@ jobs:
           mountpoint="$RUNNER_TEMP/openidea-dmg-verify"
           mkdir -p "$mountpoint"
           for dmg in test-artifacts/*.dmg; do
+            stat -f "DMG bytes: %z" "$dmg"
             hdiutil verify "$dmg"
             hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
             trap 'hdiutil detach "$mountpoint" || true' EXIT
@@ -76,7 +77,7 @@ jobs:
           done
           cd test-artifacts
           shasum -a 256 *.dmg | tee SHA256SUMS.txt
-          printf 'Build commit: %s\nTest profile: opt-level=1, lto=false, codegen-units=16\nAd-hoc signed, not notarized. Narrow public-API Shift 229 workaround on upstream 62b5f11a; stock xterm 6.0.0. Native IME evidence not simulated by automated tests.\n' "$GITHUB_SHA" > COMMIT.txt
+          printf 'Build commit: %s\nTest profile: opt-level=1, lto=false, codegen-units=16\nAd-hoc signed, not notarized. Narrow public-API Shift/Command 229 workaround on upstream 62b5f11a; stock xterm 6.0.0. Native IME evidence not simulated by automated tests.\n' "$GITHUB_SHA" > COMMIT.txt
       - uses: actions/upload-artifact@v4
         with:
           name: OpenIDEA-Shift-TEST-macOS-ARM64
